@@ -69,6 +69,81 @@ function validateMode(mode) {
   return VALID_MODES.includes(mode) ? mode : 'easy';
 }
 
+// Bingo line constants
+const BINGO_LINES = {
+  DIAG_TL_BR: [0, 6, 12, 18, 24],
+  DIAG_TR_BL: [4, 8, 12, 16, 20],
+  getAllLines: function() {
+    const lines = [];
+    // Rows
+    for (let r = 0; r < 5; r++) {
+      lines.push([0, 1, 2, 3, 4].map(c => r * 5 + c));
+    }
+    // Cols
+    for (let c = 0; c < 5; c++) {
+      lines.push([0, 1, 2, 3, 4].map(r => r * 5 + c));
+    }
+    // Diags
+    lines.push(this.DIAG_TL_BR);
+    lines.push(this.DIAG_TR_BL);
+    return lines;
+  }
+};
+
+// Helper: Check if a marked set has a bingo
+function checkBingoLines(markedSet) {
+  if (markedSet.size < 5) return false;
+  
+  // Check rows
+  for (let r = 0; r < 5; r++) {
+    if ([0, 1, 2, 3, 4].every(c => markedSet.has(r * 5 + c))) return true;
+  }
+  
+  // Check cols
+  for (let c = 0; c < 5; c++) {
+    if ([0, 1, 2, 3, 4].every(r => markedSet.has(r * 5 + c))) return true;
+  }
+  
+  // Check diags
+  if (BINGO_LINES.DIAG_TL_BR.every(i => markedSet.has(i))) return true;
+  if (BINGO_LINES.DIAG_TR_BL.every(i => markedSet.has(i))) return true;
+  
+  return false;
+}
+
+// Helper: Get player list for room
+function getPlayerList(room) {
+  return Array.from(room.players.values()).map(p => ({
+    id: p.id,
+    name: p.name
+  }));
+}
+
+// Helper: Normalize room code
+function normalizeRoomCode(roomCode) {
+  if (!roomCode || typeof roomCode !== 'string') return null;
+  return roomCode.trim().toUpperCase();
+}
+
+// Helper: Validate room access
+function validateRoomAccess(socket, roomCode) {
+  const normalizedCode = normalizeRoomCode(roomCode);
+  if (!normalizedCode) {
+    return { valid: false, error: 'Invalid room code' };
+  }
+  
+  const room = rooms.get(normalizedCode);
+  if (!room) {
+    return { valid: false, error: 'Room not found' };
+  }
+  
+  if (!room.players.has(socket.id)) {
+    return { valid: false, error: 'Not in room' };
+  }
+  
+  return { valid: true, room, roomCode: normalizedCode };
+}
+
 // Simple rate limiting
 function checkRateLimit(socket, event, maxRequests = 30, windowMs = 10000) {
   const key = `${socket.id}:${event}`;
@@ -160,6 +235,7 @@ function generateBoard(mode = 'easy') {
   const shuffled = [...pool].sort(() => 0.5 - Math.random());
   const board = shuffled.slice(0, 25);
   
+  // Only easy mode has FREE space (lock-out and hard modes don't)
   if (mode === 'easy') {
     board[12] = 'FREE';
   }
@@ -175,18 +251,7 @@ function checkBingoPossible(room) {
   const playerIds = Array.from(room.players.keys());
   
   // Get all possible bingo lines
-  const lines = [];
-  // Rows
-  for (let r = 0; r < 5; r++) {
-    lines.push([0,1,2,3,4].map(c => r * 5 + c));
-  }
-  // Cols
-  for (let c = 0; c < 5; c++) {
-    lines.push([0,1,2,3,4].map(r => r * 5 + c));
-  }
-  // Diags
-  lines.push([0, 6, 12, 18, 24]);
-  lines.push([4, 8, 12, 16, 20]);
+  const lines = BINGO_LINES.getAllLines();
   
   // Check if any line can still be completed by either player
   for (const line of lines) {
@@ -299,10 +364,7 @@ io.on('connection', (socket) => {
       roomCode: roomCode,
       mode: mode,
       isHost: true,
-      players: Array.from(room.players.values()).map(p => ({
-        id: p.id,
-        name: p.name
-      }))
+      players: getPlayerList(room)
     });
     
     console.log(`Room ${roomCode} created by ${name} (lobby)`);
@@ -317,14 +379,13 @@ io.on('connection', (socket) => {
     
     // Validate and sanitize inputs
     name = sanitizeName(name);
-    if (!roomCode || typeof roomCode !== 'string') {
+    const normalizedCode = normalizeRoomCode(roomCode);
+    if (!normalizedCode) {
       socket.emit('joinError', { message: 'Invalid room code' });
       return;
     }
-    roomCode = roomCode.trim().toUpperCase();
     
-    const room = rooms.get(roomCode);
-    
+    const room = rooms.get(normalizedCode);
     if (!room) {
       socket.emit('joinError', { message: 'Room not found' });
       return;
@@ -359,29 +420,23 @@ io.on('connection', (socket) => {
       finishTime: null
     });
     
-    socket.join(roomCode);
+    socket.join(normalizedCode);
     
     // Send lobby state to joiner
     socket.emit('roomJoined', {
-      roomCode: roomCode,
+      roomCode: normalizedCode,
       mode: room.mode,
       isHost: false,
-      players: Array.from(room.players.values()).map(p => ({
-        id: p.id,
-        name: p.name
-      }))
+      players: getPlayerList(room)
     });
     
     // Notify all players in room about the new player
-    io.to(roomCode).emit('playerJoined', {
+    io.to(normalizedCode).emit('playerJoined', {
       name: name,
-      players: Array.from(room.players.values()).map(p => ({
-        id: p.id,
-        name: p.name
-      }))
+      players: getPlayerList(room)
     });
     
-    console.log(`${name} joined room ${roomCode} (lobby)`);
+    console.log(`${name} joined room ${normalizedCode} (lobby)`);
   });
 
   socket.on('startGame', ({ roomCode }) => {
@@ -391,19 +446,13 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Validate room code
-    if (!roomCode || typeof roomCode !== 'string') {
-      socket.emit('startGameError', { message: 'Invalid room code' });
+    // Validate room code and access
+    const validation = validateRoomAccess(socket, roomCode);
+    if (!validation.valid) {
+      socket.emit('startGameError', { message: validation.error });
       return;
     }
-    roomCode = roomCode.trim().toUpperCase();
-    
-    const room = rooms.get(roomCode);
-    
-    if (!room) {
-      socket.emit('startGameError', { message: 'Room not found' });
-      return;
-    }
+    const { room, roomCode: normalizedCode } = validation;
     
     // Update last activity
     room.lastActivity = Date.now();
@@ -448,14 +497,14 @@ io.on('connection', (socket) => {
     }
     
     // Broadcast game start to all players in room simultaneously
-    io.to(roomCode).emit('gameStarted', {
-      roomCode: roomCode,
+    io.to(normalizedCode).emit('gameStarted', {
+      roomCode: normalizedCode,
       board: room.board,
       mode: room.mode,
       startTime: room.startTime
     });
     
-    console.log(`Game started in room ${roomCode} by host`);
+    console.log(`Game started in room ${normalizedCode} by host`);
   });
 
   socket.on('updateMarked', ({ roomCode, marked }) => {
@@ -465,11 +514,10 @@ io.on('connection', (socket) => {
     }
     
     // Validate inputs
-    if (!roomCode || typeof roomCode !== 'string') return;
     marked = validateMarkedArray(marked);
-    
-    const room = rooms.get(roomCode.trim().toUpperCase());
-    if (!room || !room.players.has(socket.id)) return;
+    const validation = validateRoomAccess(socket, roomCode);
+    if (!validation.valid) return;
+    const { room } = validation;
     
     // Update last activity
     room.lastActivity = Date.now();
@@ -499,23 +547,18 @@ io.on('connection', (socket) => {
     }
     
     // Validate inputs
-    if (!roomCode || typeof roomCode !== 'string') {
-      socket.emit('lockTileError', { message: 'Invalid room code' });
-      return;
-    }
-    roomCode = roomCode.trim().toUpperCase();
-    
     const index = validateTileIndex(tileIndex);
     if (index === null) {
       socket.emit('lockTileError', { message: 'Invalid tile index' });
       return;
     }
     
-    const room = rooms.get(roomCode);
-    if (!room || !room.players.has(socket.id)) {
-      socket.emit('lockTileError', { message: 'Room not found' });
+    const validation = validateRoomAccess(socket, roomCode);
+    if (!validation.valid) {
+      socket.emit('lockTileError', { message: validation.error });
       return;
     }
+    const { room, roomCode: normalizedCode } = validation;
     
     // Update last activity
     room.lastActivity = Date.now();
@@ -544,7 +587,8 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Check if tile is FREE (center in easy mode)
+    // Check if tile is FREE (only in easy mode, but lock-out uses hard mode so this is defensive)
+    // Note: Lock-out mode doesn't generate FREE spaces, but this check prevents edge cases
     if (room.board[index] === 'FREE') {
       socket.emit('lockTileError', { message: 'Cannot lock FREE space' });
       return;
@@ -575,7 +619,7 @@ io.on('connection', (socket) => {
     }
     
     // Broadcast tile locked to all players
-    io.to(roomCode).emit('tileLocked', {
+    io.to(normalizedCode).emit('tileLocked', {
       tileIndex: index,
       playerId: socket.id,
       playerName: player.name,
@@ -593,19 +637,19 @@ io.on('connection', (socket) => {
         // Enter countdown mode
         room.countdownMode = true;
         room.countdownEndTime = Date.now() + 120000; // 2 minutes
-        io.to(roomCode).emit('countdownModeStarted', {
+        io.to(normalizedCode).emit('countdownModeStarted', {
           endTime: room.countdownEndTime
         });
       } else {
         // Refresh countdown (2 minutes from now)
         room.countdownEndTime = Date.now() + 120000;
-        io.to(roomCode).emit('countdownRefreshed', {
+        io.to(normalizedCode).emit('countdownRefreshed', {
           endTime: room.countdownEndTime
         });
       }
     }
     
-    console.log(`${player.name} locked tile ${tileIndex} in room ${roomCode}`);
+    console.log(`${player.name} locked tile ${tileIndex} in room ${normalizedCode}`);
   });
   
   function getLockCounts(room) {
@@ -623,40 +667,8 @@ io.on('connection', (socket) => {
     
     // Check for bingo using player's marked tiles
     const markedSet = new Set(player.marked);
-    if (markedSet.size < 5) return;
-    
-    // Check rows
-    for (let r = 0; r < 5; r++) {
-      let ok = true;
-      for (let c = 0; c < 5; c++) {
-        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
-      }
-      if (ok) {
-        handleLockOutBingo(room, player, socket);
-        return;
-      }
-    }
-    
-    // Check cols
-    for (let c = 0; c < 5; c++) {
-      let ok = true;
-      for (let r = 0; r < 5; r++) {
-        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
-      }
-      if (ok) {
-        handleLockOutBingo(room, player, socket);
-        return;
-      }
-    }
-    
-    // Check diags
-    if ([0, 6, 12, 18, 24].every(i => markedSet.has(i))) {
+    if (checkBingoLines(markedSet)) {
       handleLockOutBingo(room, player, socket);
-      return;
-    }
-    if ([4, 8, 12, 16, 20].every(i => markedSet.has(i))) {
-      handleLockOutBingo(room, player, socket);
-      return;
     }
   }
   
@@ -734,17 +746,13 @@ io.on('connection', (socket) => {
     }
     
     // Validate inputs
-    if (!roomCode || typeof roomCode !== 'string') {
-      socket.emit('verifyResult', { valid: false, message: 'Invalid room code' });
-      return;
-    }
     marked = validateMarkedArray(marked);
-    
-    const room = rooms.get(roomCode.trim().toUpperCase());
-    if (!room || !room.players.has(socket.id)) {
-      socket.emit('verifyResult', { valid: false, message: 'Room not found' });
+    const validation = validateRoomAccess(socket, roomCode);
+    if (!validation.valid) {
+      socket.emit('verifyResult', { valid: false, message: validation.error });
       return;
     }
+    const { room } = validation;
     
     // Update last activity
     room.lastActivity = Date.now();
@@ -761,48 +769,13 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Check for bingo (same logic as frontend)
+    // Check for bingo
     const markedSet = new Set(marked);
-    if (markedSet.size < 5) {
+    if (checkBingoLines(markedSet)) {
+      handleBingo(room, player, socket);
+    } else {
       socket.emit('verifyResult', { valid: false });
-      return;
     }
-    
-    // Check rows
-    for (let r = 0; r < 5; r++) {
-      let ok = true;
-      for (let c = 0; c < 5; c++) {
-        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
-      }
-      if (ok) {
-        handleBingo(room, player, socket);
-        return;
-      }
-    }
-    
-    // Check cols
-    for (let c = 0; c < 5; c++) {
-      let ok = true;
-      for (let r = 0; r < 5; r++) {
-        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
-      }
-      if (ok) {
-        handleBingo(room, player, socket);
-        return;
-      }
-    }
-    
-    // Check diags
-    if ([0, 6, 12, 18, 24].every(i => markedSet.has(i))) {
-      handleBingo(room, player, socket);
-      return;
-    }
-    if ([4, 8, 12, 16, 20].every(i => markedSet.has(i))) {
-      handleBingo(room, player, socket);
-      return;
-    }
-    
-    socket.emit('verifyResult', { valid: false });
   });
 
   function handleBingo(room, player, socket) {
@@ -860,10 +833,7 @@ io.on('connection', (socket) => {
         // Notify other players
         socket.to(code).emit('playerLeft', {
           name: player.name,
-          players: Array.from(room.players.values()).map(p => ({
-            id: p.id,
-            name: p.name
-          }))
+          players: getPlayerList(room)
         });
         
         // Clean up empty rooms

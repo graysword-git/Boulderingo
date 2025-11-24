@@ -649,30 +649,34 @@ function getMarkedSet() {
 	return marked;
 }
 
+// Bingo line constants (matching server)
+const BINGO_LINES = {
+	DIAG_TL_BR: [0, 6, 12, 18, 24],
+	DIAG_TR_BL: [4, 8, 12, 16, 20],
+	checkBingo: function(markedSet) {
+		if (markedSet.size < 5) return false;
+		
+		// Check rows
+		for (let r = 0; r < 5; r++) {
+			if ([0, 1, 2, 3, 4].every(c => markedSet.has(r * 5 + c))) return true;
+		}
+		
+		// Check cols
+		for (let c = 0; c < 5; c++) {
+			if ([0, 1, 2, 3, 4].every(r => markedSet.has(r * 5 + c))) return true;
+		}
+		
+		// Check diags
+		if (this.DIAG_TL_BR.every(i => markedSet.has(i))) return true;
+		if (this.DIAG_TR_BL.every(i => markedSet.has(i))) return true;
+		
+		return false;
+	}
+};
+
 function hasBingo() {
 	const marked = getMarkedSet();
-	if (marked.size < 5) return false;
-	// rows
-	for (let r = 0; r < 5; r++) {
-		let ok = true;
-		for (let c = 0; c < 5; c++) {
-			if (!marked.has(r * 5 + c)) { ok = false; break; }
-		}
-		if (ok) return true;
-	}
-	// cols
-	for (let c = 0; c < 5; c++) {
-		let ok = true;
-		for (let r = 0; r < 5; r++) {
-			if (!marked.has(r * 5 + c)) { ok = false; break; }
-		}
-		if (ok) return true;
-	}
-	// diag TL-BR
-	if ([0, 6, 12, 18, 24].every(i => marked.has(i))) return true;
-	// diag TR-BL
-	if ([4, 8, 12, 16, 20].every(i => marked.has(i))) return true;
-	return false;
+	return BINGO_LINES.checkBingo(marked);
 }
 
 function getWinningLines() {
@@ -682,8 +686,8 @@ function getWinningLines() {
 	// cols
 	for (let c = 0; c < 5; c++) lines.push([0,1,2,3,4].map(r => r * 5 + c));
 	// diags
-	lines.push([0, 6, 12, 18, 24]);
-	lines.push([4, 8, 12, 16, 20]);
+	lines.push(BINGO_LINES.DIAG_TL_BR);
+	lines.push(BINGO_LINES.DIAG_TR_BL);
 
 	const marked = getMarkedSet();
 	const winners = [];
