@@ -26,6 +26,13 @@ input {
   padding: 8px;
   width: 80%;
   margin-top: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+input:focus {
+  border-color: #9d4edd;
 }
 
 .mode-row {
@@ -34,6 +41,19 @@ input {
   justify-content: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+select {
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: white;
+  cursor: pointer;
+}
+
+select:focus {
+  border-color: #9d4edd;
+  outline: none;
 }
 
 button {
@@ -49,7 +69,7 @@ button {
 }
 
 button:hover {
-  background-color: #005fcc;
+  background-color: #7b2cbf; /* Darker purple, consistent with theme */
 }
 
 #exchangeBtn:disabled {
@@ -232,6 +252,7 @@ button:hover {
   background: white;
   border-radius: 8px;
   text-align: center;
+  display: none; /* Hidden by default, shown via JS */
 }
 
 #lobby h3 {
@@ -240,9 +261,14 @@ button:hover {
 }
 
 #lobbyPlayers {
+  list-style: none;
+  padding: 12px;
+  margin: 10px 0;
+  background: white;
+  border-radius: 8px;
   max-height: 200px;
   overflow-y: auto;
-  margin: 10px 0;
+  text-align: left;
 }
 
 #lobbyPlayers li {
@@ -250,7 +276,6 @@ button:hover {
   margin: 4px 0;
   background: #f5f5f5;
   border-radius: 4px;
-  text-align: left;
 }
 
 #startGameBtn {
@@ -258,6 +283,7 @@ button:hover {
   font-size: 16px;
   padding: 12px 24px;
   margin-top: 15px;
+  display: none; /* Hidden by default, shown via JS */
 }
 
 #startGameBtn:hover {
@@ -273,6 +299,7 @@ button:hover {
   color: #666;
   font-style: italic;
   margin-top: 15px;
+  display: none; /* Hidden by default, shown via JS */
 }
 
 /* Lock-out mode styling */
@@ -288,30 +315,87 @@ button:hover {
 }
 
 #lockOutStats {
+  margin-top: 15px;
+  padding: 10px;
+  background: white;
+  border-radius: 8px;
   text-align: center;
+  font-weight: bold;
+  display: none; /* Hidden by default, shown via JS */
+}
+
+#lockStatsText {
+  margin: 0;
   font-weight: bold;
 }
 
 #countdownMode {
+  margin-top: 15px;
+  padding: 10px;
+  background: #fff9c4;
+  border-radius: 8px;
+  border: 2px solid #ffd700;
   text-align: center;
+  display: none; /* Hidden by default, shown via JS */
+}
+
+#countdownMode p:first-child {
+  margin: 0;
+  font-weight: bold;
+  color: #d32f2f;
 }
 
 #countdownTimer {
+  margin: 5px 0 0 0;
+  font-size: 18px;
+  font-weight: bold;
   font-family: monospace;
 }
 
+
 #lockConfirm {
+  margin-top: 15px;
+  padding: 10px;
+  background: #fff9c4;
+  border-radius: 8px;
   text-align: center;
+  display: none; /* Hidden by default, shown via JS */
+}
+
+#lockConfirm p {
+  margin: 0;
 }
 
 #lockConfirm button {
-  margin: 4px;
+  margin: 8px 4px 0 4px;
+}
+
+#confirmLockBtn {
+  background-color: #00bfa6;
+}
+
+#confirmLockBtn:hover {
+  background-color: #009688;
+}
+
+#cancelLockBtn {
+  background-color: #ccc;
+  color: #333;
+}
+
+#cancelLockBtn:hover {
+  background-color: #bbb;
 }
 
 #recapLog {
-  text-align: left;
+  margin-top: 15px;
+  padding: 15px;
+  background: white;
+  border-radius: 8px;
   max-height: 300px;
   overflow-y: auto;
+  text-align: left;
+  display: none; /* Hidden by default, shown via JS */
 }
 
 #recapLog h3 {
@@ -321,6 +405,8 @@ button:hover {
 
 #recapList {
   margin: 10px 0;
+  padding-left: 20px;
+  text-align: left;
 }
 
 #recapList li {
@@ -328,13 +414,57 @@ button:hover {
   border-bottom: 1px solid #eee;
 }
 
+/* Focus states for accessibility */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #9d4edd;
+  outline-offset: 2px;
+}
+
 /* Mobile UX improvements */
-@media (max-width: 480px) {
-  .container { max-width: 92vw; padding: 20px; }
-  .board { gap: 4px; }
-  .cell { font-size: 12px; padding: 6px; }
-  input { width: 100%; }
-  button { padding: 10px 14px; }
-  .join-room-section { flex-direction: column; }
-  .join-room-section input { width: 100%; }
+@media (max-width: 600px) {
+  body {
+    padding-top: 20px; /* Reduced padding on mobile */
+  }
+  
+  .container { 
+    max-width: 95vw; 
+    padding: 15px; 
+  }
+  
+  .board { 
+    gap: 4px; 
+  }
+  
+  .cell { 
+    font-size: 11px; /* Slightly larger for readability */
+    padding: 8px 4px; /* Better padding for mobile */
+  }
+  
+  input { 
+    width: 100%; 
+    min-height: 44px; /* Touch-friendly */
+  }
+  
+  button { 
+    min-height: 44px; /* Touch target size */
+    padding: 12px 16px; /* Larger padding for mobile */
+  }
+  
+  select {
+    min-height: 44px; /* Touch-friendly */
+  }
+  
+  .join-room-section { 
+    flex-direction: column; 
+  }
+  
+  .join-room-section input { 
+    width: 100%; 
+  }
+  
+  #startGameBtn {
+    min-height: 48px; /* Extra large for important action */
+  }
 }
