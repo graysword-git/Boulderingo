@@ -275,6 +275,59 @@ button:hover {
   margin-top: 15px;
 }
 
+/* Lock-out mode styling */
+.cell.locked-by-opponent {
+  background-color: #ffb3ba; /* light red/pink */
+  border: 2px solid #ff6b6b;
+}
+
+.cell.confirming {
+  background-color: #fff9c4; /* light yellow */
+  border: 2px solid #ffd700;
+  transform: scale(1.05);
+}
+
+#lockOutStats {
+  text-align: center;
+  font-weight: bold;
+}
+
+#countdownMode {
+  text-align: center;
+}
+
+#countdownTimer {
+  font-family: monospace;
+}
+
+#lockConfirm {
+  text-align: center;
+}
+
+#lockConfirm button {
+  margin: 4px;
+}
+
+#recapLog {
+  text-align: left;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+#recapLog h3 {
+  margin-top: 0;
+  color: #9d4edd;
+}
+
+#recapList {
+  margin: 10px 0;
+}
+
+#recapList li {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+}
+
 /* Mobile UX improvements */
 @media (max-width: 480px) {
   .container { max-width: 92vw; padding: 20px; }

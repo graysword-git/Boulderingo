@@ -107,14 +107,79 @@ function generateBoard(mode = 'easy') {
   return board;
 }
 
-// Clean up empty rooms periodically
+// Check if bingo is still possible in lock-out mode
+function checkBingoPossible(room) {
+  if (room.mode !== 'lock-out') return true;
+  
+  const lockedSet = new Set(room.lockedTiles.keys());
+  const playerIds = Array.from(room.players.keys());
+  
+  // Get all possible bingo lines
+  const lines = [];
+  // Rows
+  for (let r = 0; r < 5; r++) {
+    lines.push([0,1,2,3,4].map(c => r * 5 + c));
+  }
+  // Cols
+  for (let c = 0; c < 5; c++) {
+    lines.push([0,1,2,3,4].map(r => r * 5 + c));
+  }
+  // Diags
+  lines.push([0, 6, 12, 18, 24]);
+  lines.push([4, 8, 12, 16, 20]);
+  
+  // Check if any line can still be completed by either player
+  for (const line of lines) {
+    // Check if this line can be completed by player 1
+    const player1Locks = line.filter(i => {
+      const lock = room.lockedTiles.get(i);
+      return lock && lock.playerId === playerIds[0];
+    });
+    const player1OpponentLocks = line.filter(i => {
+      const lock = room.lockedTiles.get(i);
+      return lock && lock.playerId === playerIds[1];
+    });
+    // Player 1 can complete if no opponent locks in this line
+    if (player1OpponentLocks.length === 0) {
+      return true;
+    }
+    
+    // Check if this line can be completed by player 2
+    const player2Locks = line.filter(i => {
+      const lock = room.lockedTiles.get(i);
+      return lock && lock.playerId === playerIds[1];
+    });
+    const player2OpponentLocks = line.filter(i => {
+      const lock = room.lockedTiles.get(i);
+      return lock && lock.playerId === playerIds[0];
+    });
+    // Player 2 can complete if no opponent locks in this line
+    if (player2OpponentLocks.length === 0) {
+      return true;
+    }
+  }
+  
+  return false; // No bingo possible
+}
+
+// Clean up empty rooms and check countdown timers periodically
 setInterval(() => {
+  const now = Date.now();
   for (const [code, room] of rooms.entries()) {
     if (room.players.size === 0) {
       rooms.delete(code);
+      continue;
+    }
+    
+    // Check countdown mode expiration
+    if (room.mode === 'lock-out' && room.countdownMode && room.countdownEndTime) {
+      if (now >= room.countdownEndTime) {
+        // Countdown expired - determine winner by most tiles locked
+        handleCountdownEnd(room);
+      }
     }
   }
-}, 60000); // Check every minute
+}, 1000); // Check every second
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -130,7 +195,12 @@ io.on('connection', (socket) => {
       status: 'lobby', // 'lobby' or 'in-game'
       hostId: socket.id, // Track who created the room
       players: new Map(),
-      leaderboard: []
+      leaderboard: [],
+      // Lock-out mode specific
+      lockedTiles: new Map(), // tileIndex → {playerId, playerName, timestamp}
+      lockHistory: [], // Array of {tileIndex, playerId, playerName, timestamp, challenge}
+      countdownMode: false,
+      countdownEndTime: null
     };
     
     room.players.set(socket.id, {
@@ -169,6 +239,12 @@ io.on('connection', (socket) => {
     // Check if game has already started
     if (room.status === 'in-game') {
       socket.emit('joinError', { message: 'Game has already started' });
+      return;
+    }
+    
+    // Lock-out mode: only allow 2 players
+    if (room.mode === 'lock-out' && room.players.size >= 2) {
+      socket.emit('joinError', { message: 'Lock-out mode is limited to 2 players' });
       return;
     }
     
@@ -231,6 +307,12 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // Lock-out mode: must have exactly 2 players
+    if (room.mode === 'lock-out' && room.players.size !== 2) {
+      socket.emit('startGameError', { message: 'Lock-out mode requires exactly 2 players' });
+      return;
+    }
+    
     // Generate board and start time
     room.board = generateBoard(room.mode);
     room.startTime = Date.now();
@@ -243,6 +325,14 @@ io.on('connection', (socket) => {
       player.finishTime = null;
     });
     room.leaderboard = [];
+    
+    // Initialize lock-out mode data
+    if (room.mode === 'lock-out') {
+      room.lockedTiles = new Map();
+      room.lockHistory = [];
+      room.countdownMode = false;
+      room.countdownEndTime = null;
+    }
     
     // Broadcast game start to all players in room simultaneously
     io.to(roomCode).emit('gameStarted', {
@@ -262,6 +352,9 @@ io.on('connection', (socket) => {
     // Only allow updates if game has started
     if (room.status !== 'in-game') return;
     
+    // Skip updateMarked for lock-out mode (use lockTile instead)
+    if (room.mode === 'lock-out') return;
+    
     const player = room.players.get(socket.id);
     player.marked = marked;
     
@@ -272,6 +365,219 @@ io.on('connection', (socket) => {
     //   markedCount: marked.length
     // });
   });
+
+  socket.on('lockTile', ({ roomCode, tileIndex }) => {
+    const room = rooms.get(roomCode);
+    if (!room || !room.players.has(socket.id)) {
+      socket.emit('lockTileError', { message: 'Room not found' });
+      return;
+    }
+    
+    // Only allow in lock-out mode
+    if (room.mode !== 'lock-out') {
+      socket.emit('lockTileError', { message: 'Not in lock-out mode' });
+      return;
+    }
+    
+    // Only allow if game has started
+    if (room.status !== 'in-game') {
+      socket.emit('lockTileError', { message: 'Game has not started yet' });
+      return;
+    }
+    
+    const player = room.players.get(socket.id);
+    if (player.finished) {
+      socket.emit('lockTileError', { message: 'Game already finished' });
+      return;
+    }
+    
+    // Check if tile is already locked
+    if (room.lockedTiles.has(tileIndex)) {
+      socket.emit('lockTileError', { message: 'Tile already locked' });
+      return;
+    }
+    
+    // Check if tile is FREE (center in easy mode)
+    if (room.board[tileIndex] === 'FREE') {
+      socket.emit('lockTileError', { message: 'Cannot lock FREE space' });
+      return;
+    }
+    
+    // Lock the tile
+    const timestamp = Date.now();
+    const lockData = {
+      playerId: socket.id,
+      playerName: player.name,
+      timestamp: timestamp
+    };
+    room.lockedTiles.set(tileIndex, lockData);
+    
+    // Add to lock history
+    room.lockHistory.push({
+      tileIndex: tileIndex,
+      playerId: socket.id,
+      playerName: player.name,
+      timestamp: timestamp,
+      challenge: room.board[tileIndex],
+      elapsedMs: timestamp - room.startTime
+    });
+    
+    // Update player's marked array for bingo checking
+    if (!player.marked.includes(tileIndex)) {
+      player.marked.push(tileIndex);
+    }
+    
+    // Broadcast tile locked to all players
+    io.to(roomCode).emit('tileLocked', {
+      tileIndex: tileIndex,
+      playerId: socket.id,
+      playerName: player.name,
+      timestamp: timestamp,
+      lockedTiles: Object.fromEntries(room.lockedTiles),
+      lockCounts: getLockCounts(room)
+    });
+    
+    // Auto-check for bingo
+    checkLockOutBingo(room, player, socket);
+    
+    // Check if bingo is still possible, enter countdown mode if not
+    if (!checkBingoPossible(room)) {
+      if (!room.countdownMode) {
+        // Enter countdown mode
+        room.countdownMode = true;
+        room.countdownEndTime = Date.now() + 120000; // 2 minutes
+        io.to(roomCode).emit('countdownModeStarted', {
+          endTime: room.countdownEndTime
+        });
+      } else {
+        // Refresh countdown (2 minutes from now)
+        room.countdownEndTime = Date.now() + 120000;
+        io.to(roomCode).emit('countdownRefreshed', {
+          endTime: room.countdownEndTime
+        });
+      }
+    }
+    
+    console.log(`${player.name} locked tile ${tileIndex} in room ${roomCode}`);
+  });
+  
+  function getLockCounts(room) {
+    const counts = {};
+    room.players.forEach((player, playerId) => {
+      counts[playerId] = Array.from(room.lockedTiles.values()).filter(
+        lock => lock.playerId === playerId
+      ).length;
+    });
+    return counts;
+  }
+  
+  function checkLockOutBingo(room, player, socket) {
+    if (player.finished) return;
+    
+    // Check for bingo using player's marked tiles
+    const markedSet = new Set(player.marked);
+    if (markedSet.size < 5) return;
+    
+    // Check rows
+    for (let r = 0; r < 5; r++) {
+      let ok = true;
+      for (let c = 0; c < 5; c++) {
+        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
+      }
+      if (ok) {
+        handleLockOutBingo(room, player, socket);
+        return;
+      }
+    }
+    
+    // Check cols
+    for (let c = 0; c < 5; c++) {
+      let ok = true;
+      for (let r = 0; r < 5; r++) {
+        if (!markedSet.has(r * 5 + c)) { ok = false; break; }
+      }
+      if (ok) {
+        handleLockOutBingo(room, player, socket);
+        return;
+      }
+    }
+    
+    // Check diags
+    if ([0, 6, 12, 18, 24].every(i => markedSet.has(i))) {
+      handleLockOutBingo(room, player, socket);
+      return;
+    }
+    if ([4, 8, 12, 16, 20].every(i => markedSet.has(i))) {
+      handleLockOutBingo(room, player, socket);
+      return;
+    }
+  }
+  
+  function handleLockOutBingo(room, player, socket) {
+    const finishTime = Date.now();
+    const elapsedMs = finishTime - room.startTime;
+    
+    player.finished = true;
+    player.finishTime = finishTime;
+    player.elapsedMs = elapsedMs;
+    
+    // End countdown mode if active
+    room.countdownMode = false;
+    
+    // Broadcast win to all players
+    io.to(room.code).emit('lockOutWin', {
+      winnerId: socket.id,
+      winnerName: player.name,
+      elapsedMs: elapsedMs,
+      lockHistory: room.lockHistory,
+      winType: 'bingo'
+    });
+    
+    console.log(`${player.name} won lock-out in room ${room.code}`);
+  }
+  
+  function handleCountdownEnd(room) {
+    room.countdownMode = false;
+    room.status = 'finished';
+    
+    // Count tiles locked by each player
+    const lockCounts = getLockCounts(room);
+    const playerIds = Array.from(room.players.keys());
+    const player1Count = lockCounts[playerIds[0]] || 0;
+    const player2Count = lockCounts[playerIds[1]] || 0;
+    
+    let winnerId, winnerName, winType;
+    if (player1Count > player2Count) {
+      winnerId = playerIds[0];
+      winnerName = room.players.get(playerIds[0]).name;
+      winType = 'most_tiles';
+    } else if (player2Count > player1Count) {
+      winnerId = playerIds[1];
+      winnerName = room.players.get(playerIds[1]).name;
+      winType = 'most_tiles';
+    } else {
+      // Tie - could be first to lock, or just declare tie
+      winnerId = null;
+      winnerName = 'Tie';
+      winType = 'tie';
+    }
+    
+    // Mark players as finished
+    room.players.forEach(player => {
+      player.finished = true;
+    });
+    
+    // Broadcast countdown end result
+    io.to(room.code).emit('countdownEnded', {
+      winnerId: winnerId,
+      winnerName: winnerName,
+      lockCounts: lockCounts,
+      lockHistory: room.lockHistory,
+      winType: winType
+    });
+    
+    console.log(`Countdown ended in room ${room.code}, winner: ${winnerName}`);
+  }
 
   socket.on('verifyBingo', ({ roomCode, marked }) => {
     const room = rooms.get(roomCode);

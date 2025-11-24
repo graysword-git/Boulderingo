@@ -22,6 +22,7 @@
         <select id="modeSelect">
           <option value="easy" selected>Easy</option>
           <option value="hard">Hard</option>
+          <option value="lock-out">Lock-Out</option>
         </select>
       </div>
       
@@ -52,6 +53,26 @@
             <ul id="lobbyPlayers" style="list-style: none; padding: 0; text-align: left; background: white; border-radius: 8px; padding: 12px; margin: 10px 0;"></ul>
             <button id="startGameBtn" style="display: none; margin-top: 15px; padding: 12px 24px; font-size: 16px; font-weight: bold;">Start Game</button>
             <p id="waitingForHost" style="display: none; margin-top: 15px; font-style: italic;">Waiting for host to start the game...</p>
+          </div>
+          
+          <div id="lockOutStats" style="display: none; margin-top: 15px; padding: 10px; background: white; border-radius: 8px;">
+            <p id="lockStatsText" style="margin: 0; font-weight: bold;"></p>
+          </div>
+          
+          <div id="countdownMode" style="display: none; margin-top: 15px; padding: 10px; background: #fff9c4; border-radius: 8px; border: 2px solid #ffd700;">
+            <p style="margin: 0; font-weight: bold; color: #d32f2f;">⚠️ No bingos possible - Most tiles wins!</p>
+            <p id="countdownTimer" style="margin: 5px 0 0 0; font-size: 18px; font-weight: bold;"></p>
+          </div>
+          
+          <div id="lockConfirm" style="display: none; margin-top: 15px; padding: 10px; background: #fff9c4; border-radius: 8px;">
+            <p style="margin: 0;">Confirm lock this tile?</p>
+            <button id="confirmLockBtn" style="margin-top: 8px; padding: 8px 16px; background-color: #00bfa6;">Confirm Lock</button>
+            <button id="cancelLockBtn" style="margin-top: 8px; margin-left: 8px; padding: 8px 16px; background-color: #ccc;">Cancel</button>
+          </div>
+          
+          <div id="recapLog" style="display: none; margin-top: 15px; padding: 15px; background: white; border-radius: 8px; max-height: 300px; overflow-y: auto;">
+            <h3>Game Recap</h3>
+            <ol id="recapList" style="text-align: left; padding-left: 20px;"></ol>
           </div>
         </div>
       </div>

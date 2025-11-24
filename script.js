@@ -31,6 +31,12 @@ let currentRoomCode = null;
 let roomStartTime = null;
 let isHost = false;
 let lobbyPlayers = [];
+let currentMode = 'easy';
+let lockedTiles = new Map(); // tileIndex → {playerId, playerName}
+let confirmingTileIndex = null;
+let lockCounts = { myLocks: 0, opponentLocks: 0 };
+let countdownEndTime = null;
+let countdownInterval = null;
 
 const CHALLENGES = [
 	"Pink -7 holds",
@@ -153,12 +159,27 @@ function initSocket() {
 	
 	socket.on('gameStarted', ({ roomCode, board, mode, startTime }) => {
 		roomStartTime = startTime;
+		currentMode = mode;
 		
 		// Hide lobby, show game
 		hideLobby();
 		
 		// Set mode and render board
 		modeSelect.value = mode;
+		
+		// Initialize lock-out mode
+		if (mode === 'lock-out') {
+			lockedTiles = new Map();
+			lockCounts = { myLocks: 0, opponentLocks: 0 };
+			confirmingTileIndex = null;
+			verifyBtn.style.display = 'none'; // Hide verify button in lock-out mode
+			document.getElementById('lockOutStats').style.display = 'block';
+			updateLockStats();
+		} else {
+			verifyBtn.style.display = 'block';
+			document.getElementById('lockOutStats').style.display = 'none';
+		}
+		
 		renderBoard(board);
 		saveData(nameInput.value.trim(), board);
 		localStorage.removeItem('bingoMarked');
@@ -171,10 +192,12 @@ function initSocket() {
 		updateTimer();
 		if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
 		
-		// Show leaderboard
-		leaderboard.style.display = 'block';
-		leaderboardTitle.textContent = 'Room Leaderboard';
-		leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
+		// Show leaderboard (not in lock-out mode)
+		if (mode !== 'lock-out') {
+			leaderboard.style.display = 'block';
+			leaderboardTitle.textContent = 'Room Leaderboard';
+			leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
+		}
 	});
 	
 	socket.on('startGameError', ({ message }) => {
@@ -184,6 +207,78 @@ function initSocket() {
 	socket.on('hostChanged', ({ isHost: hostStatus }) => {
 		isHost = hostStatus;
 		updateStartGameButton();
+	});
+	
+	socket.on('tileLocked', ({ tileIndex, playerId, playerName, timestamp, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts }) => {
+		// Update locked tiles map
+		lockedTiles.set(tileIndex, { playerId, playerName, timestamp });
+		
+		// Update lock counts
+		if (serverLockCounts) {
+			const myId = socket.id;
+			lockCounts.myLocks = serverLockCounts[myId] || 0;
+			// Find opponent's count
+			const opponentId = Object.keys(serverLockCounts).find(id => id !== myId);
+			lockCounts.opponentLocks = opponentId ? (serverLockCounts[opponentId] || 0) : 0;
+		}
+		
+		// Update board visuals
+		updateLockedTileVisual(tileIndex, playerId === socket.id);
+		
+		// Update stats
+		updateLockStats();
+		
+		// Cancel confirmation if this was the tile being confirmed
+		if (confirmingTileIndex === tileIndex) {
+			cancelTileConfirmation();
+		}
+	});
+	
+	socket.on('lockTileError', ({ message }) => {
+		alert(`Error: ${message}`);
+		cancelTileConfirmation();
+	});
+	
+	socket.on('lockOutWin', ({ winnerId, winnerName, elapsedMs, lockHistory, winType }) => {
+		stopTimer();
+		stopCountdown();
+		const finalTime = timerEl ? timerEl.textContent : '';
+		highlightWinningLines(getWinningLines());
+		
+		let message = `🎉 ${winnerName} wins! 🎉\nTime: ${finalTime}`;
+		if (winType === 'bingo') {
+			message += '\nWin Type: Bingo!';
+		}
+		alert(message);
+		
+		// Show recap log
+		showRecapLog(lockHistory);
+	});
+	
+	socket.on('countdownModeStarted', ({ endTime }) => {
+		countdownEndTime = endTime;
+		document.getElementById('countdownMode').style.display = 'block';
+		startCountdown();
+	});
+	
+	socket.on('countdownRefreshed', ({ endTime }) => {
+		countdownEndTime = endTime;
+	});
+	
+	socket.on('countdownEnded', ({ winnerId, winnerName, lockCounts: finalLockCounts, lockHistory, winType }) => {
+		stopTimer();
+		stopCountdown();
+		
+		let message;
+		if (winType === 'tie') {
+			message = `🤝 Tie Game! 🤝\nBoth players locked ${finalLockCounts[Object.keys(finalLockCounts)[0]]} tiles`;
+		} else {
+			message = `🎉 ${winnerName} wins! 🎉\nWin Type: Most tiles locked`;
+		}
+		alert(message);
+		
+		// Show recap log
+		showRecapLog(lockHistory);
 	});
 	
 	socket.on('leaderboardUpdate', ({ leaderboard: roomLeaderboard }) => {
@@ -374,16 +469,42 @@ function renderBoard(board, marked = []) {
 		const cell = document.createElement('div');
 		cell.className = 'cell';
 		cell.textContent = text || "";
+		cell.dataset.tileIndex = index;
+		
 		// free space handling: start marked but no special class
 		if (text === 'FREE') cell.classList.add('marked');
-		// track marked cells by pointer down
-		if (marked.includes(index)) cell.classList.add('marked');
-		cell.addEventListener('pointerdown', () => {
-			if (exchangeMode) return;
-			if (cell.textContent === 'FREE') return;
-			cell.classList.toggle('marked');
-			saveMarkedState();
-		});
+		
+		// Lock-out mode: handle locked tiles
+		if (currentMode === 'lock-out') {
+			const lock = lockedTiles.get(index);
+			if (lock) {
+				if (lock.playerId === socket.id) {
+					cell.classList.add('marked'); // Your locked tile
+				} else {
+					cell.classList.add('locked-by-opponent'); // Opponent's locked tile
+				}
+			}
+			
+			cell.addEventListener('pointerdown', () => {
+				if (exchangeMode) return;
+				if (cell.textContent === 'FREE') return;
+				if (lockedTiles.has(index)) return; // Already locked
+				if (confirmingTileIndex === index) return; // Already confirming
+				
+				// Start confirmation
+				startTileConfirmation(index);
+			});
+		} else {
+			// Regular mode
+			if (marked.includes(index)) cell.classList.add('marked');
+			cell.addEventListener('pointerdown', () => {
+				if (exchangeMode) return;
+				if (cell.textContent === 'FREE') return;
+				cell.classList.toggle('marked');
+				saveMarkedState();
+			});
+		}
+		
 		bingoBoard.appendChild(cell);
 	});
 }
@@ -718,6 +839,123 @@ if (startGameBtn) {
 		startGameBtn.disabled = true;
 		startGameBtn.textContent = 'Starting...';
 	});
+}
+
+// Lock-out mode helper functions
+function startTileConfirmation(tileIndex) {
+	confirmingTileIndex = tileIndex;
+	const cell = bingoBoard.children[tileIndex];
+	if (cell) {
+		cell.classList.add('confirming');
+	}
+	document.getElementById('lockConfirm').style.display = 'block';
+}
+
+function cancelTileConfirmation() {
+	if (confirmingTileIndex !== null) {
+		const cell = bingoBoard.children[confirmingTileIndex];
+		if (cell) {
+			cell.classList.remove('confirming');
+		}
+		confirmingTileIndex = null;
+	}
+	document.getElementById('lockConfirm').style.display = 'none';
+}
+
+function confirmTileLock() {
+	if (confirmingTileIndex === null || !socket || !currentRoomCode) return;
+	
+	socket.emit('lockTile', { roomCode: currentRoomCode, tileIndex: confirmingTileIndex });
+	cancelTileConfirmation();
+}
+
+function updateLockedTileVisual(tileIndex, isMyTile) {
+	const cell = bingoBoard.children[tileIndex];
+	if (!cell) return;
+	
+	cell.classList.remove('confirming');
+	if (isMyTile) {
+		cell.classList.add('marked');
+		cell.classList.remove('locked-by-opponent');
+	} else {
+		cell.classList.add('locked-by-opponent');
+		cell.classList.remove('marked');
+	}
+}
+
+function updateLockStats() {
+	const statsText = document.getElementById('lockStatsText');
+	if (statsText) {
+		statsText.textContent = `You: ${lockCounts.myLocks} locked | Opponent: ${lockCounts.opponentLocks} locked`;
+	}
+}
+
+function startCountdown() {
+	if (countdownInterval) clearInterval(countdownInterval);
+	
+	countdownInterval = setInterval(() => {
+		if (!countdownEndTime) return;
+		
+		const now = Date.now();
+		const remaining = Math.max(0, countdownEndTime - now);
+		
+		if (remaining === 0) {
+			stopCountdown();
+			return;
+		}
+		
+		const minutes = Math.floor(remaining / 60000);
+		const seconds = Math.floor((remaining % 60000) / 1000);
+		const timerText = document.getElementById('countdownTimer');
+		if (timerText) {
+			timerText.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+		}
+	}, 100);
+}
+
+function stopCountdown() {
+	if (countdownInterval) {
+		clearInterval(countdownInterval);
+		countdownInterval = null;
+	}
+	document.getElementById('countdownMode').style.display = 'none';
+}
+
+function showRecapLog(lockHistory) {
+	const recapLog = document.getElementById('recapLog');
+	const recapList = document.getElementById('recapList');
+	
+	if (!recapLog || !recapList) return;
+	
+	recapList.innerHTML = '';
+	
+	if (!lockHistory || lockHistory.length === 0) {
+		recapList.innerHTML = '<li>No locks recorded</li>';
+		recapLog.style.display = 'block';
+		return;
+	}
+	
+	lockHistory.forEach((lock, index) => {
+		const li = document.createElement('li');
+		const elapsedSeconds = Math.floor(lock.elapsedMs / 1000);
+		const minutes = Math.floor(elapsedSeconds / 60);
+		const seconds = elapsedSeconds % 60;
+		const timeStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+		li.textContent = `${timeStr} - ${lock.playerName} locked "${lock.challenge}"`;
+		recapList.appendChild(li);
+	});
+	
+	recapLog.style.display = 'block';
+}
+
+// Set up confirmation button handlers
+const confirmLockBtn = document.getElementById('confirmLockBtn');
+const cancelLockBtn = document.getElementById('cancelLockBtn');
+if (confirmLockBtn) {
+	confirmLockBtn.addEventListener('click', confirmTileLock);
+}
+if (cancelLockBtn) {
+	cancelLockBtn.addEventListener('click', cancelTileConfirmation);
 }
 
 window.addEventListener('load', loadData);
