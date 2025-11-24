@@ -75,21 +75,23 @@ let exchangeUsed = false;
 function initSocket() {
 	if (socket) return socket;
 	
-	// Change this to your backend server URL
-	// For local development: 'http://localhost:3000'
-	// For production: replace with your actual backend server URL
-	// You can set this via a data attribute in HTML or environment variable
-	const backendUrl = document.body.dataset.backendUrl || '';
+	// Backend URL can be set via data-backend-url attribute in HTML
+	// For local development: leave empty to auto-detect localhost
+	// For production: set to your Railway backend URL (e.g., "https://your-app.up.railway.app")
+	const backendUrl = (document.body.dataset.backendUrl || '').trim();
 	
 	// Determine server URL
 	let serverUrl;
 	if (backendUrl) {
+		// Use explicitly set backend URL
 		serverUrl = backendUrl;
 	} else if (window.location.protocol === 'file:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
 		// Local development - always use localhost:3000
 		serverUrl = 'http://localhost:3000';
 	} else {
-		// Production - use same origin
+		// Production - if no backend URL set, try same origin (won't work if backend is on different domain)
+		// You should set data-backend-url attribute with your Railway URL
+		console.warn('No backend URL configured. Set data-backend-url attribute in <body> tag with your Railway backend URL.');
 		serverUrl = window.location.origin;
 	}
 	
