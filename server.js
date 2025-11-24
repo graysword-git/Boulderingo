@@ -8,13 +8,11 @@ const server = http.createServer(app);
 // Configure CORS - update with your frontend domain in production
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ["https://graysword.ca", "https://www.graysword.ca", "http://localhost:3000", "*"]; // Allow frontend domain and localhost
+  : ["https://graysword.ca", "https://www.graysword.ca", "http://localhost:3000"]; // Removed wildcard for security
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins.length === 1 && allowedOrigins[0] === "*" 
-      ? "*" 
-      : allowedOrigins,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -37,6 +35,68 @@ app.get('/health', (req, res) => {
 
 // In-memory storage for rooms
 const rooms = new Map();
+
+// Rate limiting storage
+const rateLimits = new Map(); // socket.id:event → {count, resetTime}
+
+// Input validation functions
+function sanitizeName(name) {
+  if (!name || typeof name !== 'string') return 'Anonymous';
+  name = name.trim();
+  if (name.length === 0) return 'Anonymous';
+  if (name.length > 20) name = name.substring(0, 20);
+  // Remove HTML tags to prevent XSS
+  name = name.replace(/<[^>]*>/g, '');
+  return name;
+}
+
+function validateTileIndex(tileIndex) {
+  const index = parseInt(tileIndex);
+  return (!isNaN(index) && index >= 0 && index < 25) ? index : null;
+}
+
+function validateMarkedArray(marked) {
+  if (!Array.isArray(marked)) return [];
+  if (marked.length > 25) return marked.slice(0, 25); // Limit size to prevent DoS
+  return marked.filter(i => {
+    const idx = parseInt(i);
+    return !isNaN(idx) && idx >= 0 && idx < 25;
+  });
+}
+
+const VALID_MODES = ['easy', 'hard', 'lock-out'];
+function validateMode(mode) {
+  return VALID_MODES.includes(mode) ? mode : 'easy';
+}
+
+// Simple rate limiting
+function checkRateLimit(socket, event, maxRequests = 30, windowMs = 10000) {
+  const key = `${socket.id}:${event}`;
+  const now = Date.now();
+  const limit = rateLimits.get(key);
+  
+  if (!limit || now > limit.resetTime) {
+    rateLimits.set(key, { count: 1, resetTime: now + windowMs });
+    return true;
+  }
+  
+  if (limit.count >= maxRequests) {
+    return false;
+  }
+  
+  limit.count++;
+  return true;
+}
+
+// Clean up old rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, limit] of rateLimits.entries()) {
+    if (now > limit.resetTime) {
+      rateLimits.delete(key);
+    }
+  }
+}, 60000); // Every minute
 
 // Challenge pools (same as frontend)
 const CHALLENGES = [
@@ -167,6 +227,14 @@ setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms.entries()) {
     if (room.players.size === 0) {
+      // Delete empty rooms immediately
+      rooms.delete(code);
+      continue;
+    }
+    
+    // Clean up old inactive rooms (1 hour of inactivity)
+    const lastActivity = room.lastActivity || room.createdAt || now;
+    if (now - lastActivity > 3600000) { // 1 hour
       rooms.delete(code);
       continue;
     }
@@ -185,6 +253,16 @@ io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('createRoom', ({ name, mode }) => {
+    // Rate limiting
+    if (!checkRateLimit(socket, 'createRoom', 5, 60000)) {
+      socket.emit('createRoomError', { message: 'Too many requests. Please wait a moment.' });
+      return;
+    }
+    
+    // Validate and sanitize inputs
+    name = sanitizeName(name);
+    mode = validateMode(mode);
+    
     const roomCode = generateRoomCode();
     
     const room = {
@@ -200,7 +278,9 @@ io.on('connection', (socket) => {
       lockedTiles: new Map(), // tileIndex → {playerId, playerName, timestamp}
       lockHistory: [], // Array of {tileIndex, playerId, playerName, timestamp, challenge}
       countdownMode: false,
-      countdownEndTime: null
+      countdownEndTime: null,
+      createdAt: Date.now(),
+      lastActivity: Date.now()
     };
     
     room.players.set(socket.id, {
@@ -229,12 +309,29 @@ io.on('connection', (socket) => {
   });
 
   socket.on('joinRoom', ({ roomCode, name }) => {
+    // Rate limiting
+    if (!checkRateLimit(socket, 'joinRoom', 10, 60000)) {
+      socket.emit('joinError', { message: 'Too many requests. Please wait a moment.' });
+      return;
+    }
+    
+    // Validate and sanitize inputs
+    name = sanitizeName(name);
+    if (!roomCode || typeof roomCode !== 'string') {
+      socket.emit('joinError', { message: 'Invalid room code' });
+      return;
+    }
+    roomCode = roomCode.trim().toUpperCase();
+    
     const room = rooms.get(roomCode);
     
     if (!room) {
       socket.emit('joinError', { message: 'Room not found' });
       return;
     }
+    
+    // Update last activity
+    room.lastActivity = Date.now();
     
     // Check if game has already started
     if (room.status === 'in-game') {
@@ -288,12 +385,28 @@ io.on('connection', (socket) => {
   });
 
   socket.on('startGame', ({ roomCode }) => {
+    // Rate limiting
+    if (!checkRateLimit(socket, 'startGame', 5, 60000)) {
+      socket.emit('startGameError', { message: 'Too many requests. Please wait a moment.' });
+      return;
+    }
+    
+    // Validate room code
+    if (!roomCode || typeof roomCode !== 'string') {
+      socket.emit('startGameError', { message: 'Invalid room code' });
+      return;
+    }
+    roomCode = roomCode.trim().toUpperCase();
+    
     const room = rooms.get(roomCode);
     
     if (!room) {
       socket.emit('startGameError', { message: 'Room not found' });
       return;
     }
+    
+    // Update last activity
+    room.lastActivity = Date.now();
     
     // Only host can start the game
     if (room.hostId !== socket.id) {
@@ -346,8 +459,20 @@ io.on('connection', (socket) => {
   });
 
   socket.on('updateMarked', ({ roomCode, marked }) => {
-    const room = rooms.get(roomCode);
+    // Rate limiting
+    if (!checkRateLimit(socket, 'updateMarked', 30, 10000)) {
+      return; // Silently ignore if rate limited
+    }
+    
+    // Validate inputs
+    if (!roomCode || typeof roomCode !== 'string') return;
+    marked = validateMarkedArray(marked);
+    
+    const room = rooms.get(roomCode.trim().toUpperCase());
     if (!room || !room.players.has(socket.id)) return;
+    
+    // Update last activity
+    room.lastActivity = Date.now();
     
     // Only allow updates if game has started
     if (room.status !== 'in-game') return;
@@ -367,11 +492,33 @@ io.on('connection', (socket) => {
   });
 
   socket.on('lockTile', ({ roomCode, tileIndex }) => {
+    // Rate limiting
+    if (!checkRateLimit(socket, 'lockTile', 30, 10000)) {
+      socket.emit('lockTileError', { message: 'Too many requests. Please wait a moment.' });
+      return;
+    }
+    
+    // Validate inputs
+    if (!roomCode || typeof roomCode !== 'string') {
+      socket.emit('lockTileError', { message: 'Invalid room code' });
+      return;
+    }
+    roomCode = roomCode.trim().toUpperCase();
+    
+    const index = validateTileIndex(tileIndex);
+    if (index === null) {
+      socket.emit('lockTileError', { message: 'Invalid tile index' });
+      return;
+    }
+    
     const room = rooms.get(roomCode);
     if (!room || !room.players.has(socket.id)) {
       socket.emit('lockTileError', { message: 'Room not found' });
       return;
     }
+    
+    // Update last activity
+    room.lastActivity = Date.now();
     
     // Only allow in lock-out mode
     if (room.mode !== 'lock-out') {
@@ -392,13 +539,13 @@ io.on('connection', (socket) => {
     }
     
     // Check if tile is already locked
-    if (room.lockedTiles.has(tileIndex)) {
+    if (room.lockedTiles.has(index)) {
       socket.emit('lockTileError', { message: 'Tile already locked' });
       return;
     }
     
     // Check if tile is FREE (center in easy mode)
-    if (room.board[tileIndex] === 'FREE') {
+    if (room.board[index] === 'FREE') {
       socket.emit('lockTileError', { message: 'Cannot lock FREE space' });
       return;
     }
@@ -410,26 +557,26 @@ io.on('connection', (socket) => {
       playerName: player.name,
       timestamp: timestamp
     };
-    room.lockedTiles.set(tileIndex, lockData);
+    room.lockedTiles.set(index, lockData);
     
     // Add to lock history
     room.lockHistory.push({
-      tileIndex: tileIndex,
+      tileIndex: index,
       playerId: socket.id,
       playerName: player.name,
       timestamp: timestamp,
-      challenge: room.board[tileIndex],
+      challenge: room.board[index],
       elapsedMs: timestamp - room.startTime
     });
     
     // Update player's marked array for bingo checking
-    if (!player.marked.includes(tileIndex)) {
-      player.marked.push(tileIndex);
+    if (!player.marked.includes(index)) {
+      player.marked.push(index);
     }
     
     // Broadcast tile locked to all players
     io.to(roomCode).emit('tileLocked', {
-      tileIndex: tileIndex,
+      tileIndex: index,
       playerId: socket.id,
       playerName: player.name,
       timestamp: timestamp,
@@ -580,11 +727,27 @@ io.on('connection', (socket) => {
   }
 
   socket.on('verifyBingo', ({ roomCode, marked }) => {
-    const room = rooms.get(roomCode);
+    // Rate limiting
+    if (!checkRateLimit(socket, 'verifyBingo', 10, 10000)) {
+      socket.emit('verifyResult', { valid: false, message: 'Too many requests' });
+      return;
+    }
+    
+    // Validate inputs
+    if (!roomCode || typeof roomCode !== 'string') {
+      socket.emit('verifyResult', { valid: false, message: 'Invalid room code' });
+      return;
+    }
+    marked = validateMarkedArray(marked);
+    
+    const room = rooms.get(roomCode.trim().toUpperCase());
     if (!room || !room.players.has(socket.id)) {
       socket.emit('verifyResult', { valid: false, message: 'Room not found' });
       return;
     }
+    
+    // Update last activity
+    room.lastActivity = Date.now();
     
     // Only allow verification if game has started
     if (room.status !== 'in-game') {
