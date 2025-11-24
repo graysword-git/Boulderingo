@@ -121,14 +121,14 @@ io.on('connection', (socket) => {
 
   socket.on('createRoom', ({ name, mode }) => {
     const roomCode = generateRoomCode();
-    const board = generateBoard(mode);
-    const roomStartTime = Date.now();
     
     const room = {
       code: roomCode,
-      board: board,
+      board: null, // Board not generated until game starts
       mode: mode,
-      startTime: roomStartTime,
+      startTime: null, // Start time set when game starts
+      status: 'lobby', // 'lobby' or 'in-game'
+      hostId: socket.id, // Track who created the room
       players: new Map(),
       leaderboard: []
     };
@@ -144,14 +144,18 @@ io.on('connection', (socket) => {
     rooms.set(roomCode, room);
     socket.join(roomCode);
     
+    // Send lobby state to creator
     socket.emit('roomCreated', {
       roomCode: roomCode,
-      board: board,
       mode: mode,
-      startTime: roomStartTime
+      isHost: true,
+      players: Array.from(room.players.values()).map(p => ({
+        id: p.id,
+        name: p.name
+      }))
     });
     
-    console.log(`Room ${roomCode} created by ${name}`);
+    console.log(`Room ${roomCode} created by ${name} (lobby)`);
   });
 
   socket.on('joinRoom', ({ roomCode, name }) => {
@@ -159,6 +163,12 @@ io.on('connection', (socket) => {
     
     if (!room) {
       socket.emit('joinError', { message: 'Room not found' });
+      return;
+    }
+    
+    // Check if game has already started
+    if (room.status === 'in-game') {
+      socket.emit('joinError', { message: 'Game has already started' });
       return;
     }
     
@@ -178,31 +188,79 @@ io.on('connection', (socket) => {
     
     socket.join(roomCode);
     
+    // Send lobby state to joiner
     socket.emit('roomJoined', {
+      roomCode: roomCode,
+      mode: room.mode,
+      isHost: false,
+      players: Array.from(room.players.values()).map(p => ({
+        id: p.id,
+        name: p.name
+      }))
+    });
+    
+    // Notify all players in room about the new player
+    io.to(roomCode).emit('playerJoined', {
+      name: name,
+      players: Array.from(room.players.values()).map(p => ({
+        id: p.id,
+        name: p.name
+      }))
+    });
+    
+    console.log(`${name} joined room ${roomCode} (lobby)`);
+  });
+
+  socket.on('startGame', ({ roomCode }) => {
+    const room = rooms.get(roomCode);
+    
+    if (!room) {
+      socket.emit('startGameError', { message: 'Room not found' });
+      return;
+    }
+    
+    // Only host can start the game
+    if (room.hostId !== socket.id) {
+      socket.emit('startGameError', { message: 'Only the host can start the game' });
+      return;
+    }
+    
+    // Check if game already started
+    if (room.status === 'in-game') {
+      socket.emit('startGameError', { message: 'Game has already started' });
+      return;
+    }
+    
+    // Generate board and start time
+    room.board = generateBoard(room.mode);
+    room.startTime = Date.now();
+    room.status = 'in-game';
+    
+    // Reset all players' game state
+    room.players.forEach(player => {
+      player.marked = [];
+      player.finished = false;
+      player.finishTime = null;
+    });
+    room.leaderboard = [];
+    
+    // Broadcast game start to all players in room simultaneously
+    io.to(roomCode).emit('gameStarted', {
       roomCode: roomCode,
       board: room.board,
       mode: room.mode,
-      startTime: room.startTime,
-      players: Array.from(room.players.values()).map(p => ({
-        name: p.name,
-        finished: p.finished,
-        finishTime: p.finishTime
-      })),
-      leaderboard: room.leaderboard
+      startTime: room.startTime
     });
     
-    // Notify other players
-    socket.to(roomCode).emit('playerJoined', {
-      name: name,
-      playerCount: room.players.size
-    });
-    
-    console.log(`${name} joined room ${roomCode}`);
+    console.log(`Game started in room ${roomCode} by host`);
   });
 
   socket.on('updateMarked', ({ roomCode, marked }) => {
     const room = rooms.get(roomCode);
     if (!room || !room.players.has(socket.id)) return;
+    
+    // Only allow updates if game has started
+    if (room.status !== 'in-game') return;
     
     const player = room.players.get(socket.id);
     player.marked = marked;
@@ -219,6 +277,12 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room || !room.players.has(socket.id)) {
       socket.emit('verifyResult', { valid: false, message: 'Room not found' });
+      return;
+    }
+    
+    // Only allow verification if game has started
+    if (room.status !== 'in-game') {
+      socket.emit('verifyResult', { valid: false, message: 'Game has not started yet' });
       return;
     }
     
@@ -315,10 +379,22 @@ io.on('connection', (socket) => {
         const player = room.players.get(socket.id);
         room.players.delete(socket.id);
         
+        // If host left and game hasn't started, assign new host
+        if (room.hostId === socket.id && room.status === 'lobby' && room.players.size > 0) {
+          // Assign first remaining player as new host
+          const newHostId = Array.from(room.players.keys())[0];
+          room.hostId = newHostId;
+          // Notify new host
+          io.to(newHostId).emit('hostChanged', { isHost: true });
+        }
+        
         // Notify other players
         socket.to(code).emit('playerLeft', {
           name: player.name,
-          playerCount: room.players.size
+          players: Array.from(room.players.values()).map(p => ({
+            id: p.id,
+            name: p.name
+          }))
         });
         
         // Clean up empty rooms

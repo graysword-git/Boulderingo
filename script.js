@@ -29,6 +29,8 @@ let socket = null;
 let isMultiplayer = false;
 let currentRoomCode = null;
 let roomStartTime = null;
+let isHost = false;
+let lobbyPlayers = [];
 
 const CHALLENGES = [
 	"Pink -7 holds",
@@ -105,12 +107,55 @@ function initSocket() {
 		console.log('Disconnected from server');
 	});
 	
-	socket.on('roomCreated', ({ roomCode, board, mode, startTime }) => {
+	socket.on('roomCreated', ({ roomCode, mode, isHost: hostStatus, players }) => {
 		currentRoomCode = roomCode;
-		roomStartTime = startTime;
+		isHost = hostStatus;
+		lobbyPlayers = players;
 		roomCodeDisplay.textContent = roomCode;
 		roomInfo.style.display = 'block';
-		roomPlayers.textContent = 'Players: 1';
+		
+		// Set mode
+		modeSelect.value = mode;
+		
+		// Show lobby UI
+		showLobby(players, hostStatus);
+	});
+	
+	socket.on('roomJoined', ({ roomCode, mode, isHost: hostStatus, players }) => {
+		currentRoomCode = roomCode;
+		isHost = hostStatus;
+		lobbyPlayers = players;
+		roomCodeDisplay.textContent = roomCode;
+		roomInfo.style.display = 'block';
+		
+		// Set mode
+		modeSelect.value = mode;
+		
+		// Show lobby UI
+		showLobby(players, hostStatus);
+	});
+	
+	socket.on('joinError', ({ message }) => {
+		alert(`Error: ${message}`);
+	});
+	
+	socket.on('playerJoined', ({ name, players }) => {
+		lobbyPlayers = players;
+		updateLobbyPlayers(players);
+		console.log(`${name} joined the room`);
+	});
+	
+	socket.on('playerLeft', ({ name, players }) => {
+		lobbyPlayers = players;
+		updateLobbyPlayers(players);
+		console.log(`${name} left the room`);
+	});
+	
+	socket.on('gameStarted', ({ roomCode, board, mode, startTime }) => {
+		roomStartTime = startTime;
+		
+		// Hide lobby, show game
+		hideLobby();
 		
 		// Set mode and render board
 		modeSelect.value = mode;
@@ -132,45 +177,13 @@ function initSocket() {
 		leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
 	});
 	
-	socket.on('roomJoined', ({ roomCode, board, mode, startTime, players, leaderboard: roomLeaderboard }) => {
-		currentRoomCode = roomCode;
-		roomStartTime = startTime;
-		roomCodeDisplay.textContent = roomCode;
-		roomInfo.style.display = 'block';
-		roomPlayers.textContent = `Players: ${players.length}`;
-		
-		// Set mode and render board
-		modeSelect.value = mode;
-		renderBoard(board);
-		saveData(nameInput.value.trim(), board);
-		localStorage.removeItem('bingoMarked');
-		exchangeUsed = false;
-		localStorage.setItem('exchangeUsed', 'false');
-		updateExchangeButtonState();
-		
-		// Start timer from room start time
-		timerStartMs = startTime;
-		updateTimer();
-		if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-		
-		// Show leaderboard
-		leaderboard.style.display = 'block';
-		leaderboardTitle.textContent = 'Room Leaderboard';
-		renderMultiplayerLeaderboard(roomLeaderboard);
-	});
-	
-	socket.on('joinError', ({ message }) => {
+	socket.on('startGameError', ({ message }) => {
 		alert(`Error: ${message}`);
 	});
 	
-	socket.on('playerJoined', ({ name, playerCount }) => {
-		roomPlayers.textContent = `Players: ${playerCount}`;
-		console.log(`${name} joined the room`);
-	});
-	
-	socket.on('playerLeft', ({ name, playerCount }) => {
-		roomPlayers.textContent = `Players: ${playerCount}`;
-		console.log(`${name} left the room`);
+	socket.on('hostChanged', ({ isHost: hostStatus }) => {
+		isHost = hostStatus;
+		updateStartGameButton();
 	});
 	
 	socket.on('leaderboardUpdate', ({ leaderboard: roomLeaderboard }) => {
@@ -220,6 +233,78 @@ function renderMultiplayerLeaderboard(roomLeaderboard) {
 		li.textContent = `${entry.position}. ${entry.name} — ${formatMs(entry.elapsedMs)}`;
 		leaderboardList.appendChild(li);
 	});
+}
+
+// Lobby functions
+function showLobby(players, hostStatus) {
+	isHost = hostStatus;
+	lobbyPlayers = players;
+	
+	// Hide game elements
+	bingoBoard.style.display = 'none';
+	verifyBtn.style.display = 'none';
+	exchangeBtn.style.display = 'none';
+	leaderboard.style.display = 'none';
+	timerEl.style.display = 'none';
+	
+	// Show lobby
+	const lobbyEl = document.getElementById('lobby');
+	if (lobbyEl) {
+		lobbyEl.style.display = 'block';
+		updateLobbyPlayers(players);
+		updateStartGameButton();
+	}
+}
+
+function hideLobby() {
+	const lobbyEl = document.getElementById('lobby');
+	if (lobbyEl) {
+		lobbyEl.style.display = 'none';
+	}
+	
+	// Show game elements
+	bingoBoard.style.display = 'grid';
+	verifyBtn.style.display = 'block';
+	exchangeBtn.style.display = 'block';
+	timerEl.style.display = 'block';
+}
+
+function updateLobbyPlayers(players) {
+	const lobbyPlayersEl = document.getElementById('lobbyPlayers');
+	if (lobbyPlayersEl) {
+		lobbyPlayersEl.innerHTML = '';
+		players.forEach((player) => {
+			const li = document.createElement('li');
+			let playerText = player.name;
+			if (socket && player.id === socket.id) {
+				if (isHost) {
+					playerText += ' (You - Host)';
+				} else {
+					playerText += ' (You)';
+				}
+			}
+			li.textContent = playerText;
+			lobbyPlayersEl.appendChild(li);
+		});
+	}
+	
+	// Update player count
+	if (roomPlayers) {
+		roomPlayers.textContent = `Players: ${players.length}`;
+	}
+}
+
+function updateStartGameButton() {
+	const startGameBtn = document.getElementById('startGameBtn');
+	const waitingForHost = document.getElementById('waitingForHost');
+	if (startGameBtn) {
+		startGameBtn.style.display = isHost ? 'block' : 'none';
+		startGameBtn.disabled = false;
+		startGameBtn.textContent = 'Start Game';
+	}
+	if (waitingForHost) {
+		waitingForHost.style.display = isHost ? 'none' : 'block';
+	}
 }
 
 function stopTimer() {
@@ -497,38 +582,6 @@ function highlightWinningLines(lines) {
 	});
 }
 
-/* Leaderboard temporarily disabled
-function formatMs(ms) {
-	const totalSeconds = Math.floor(ms / 1000);
-	const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-	const seconds = String(totalSeconds % 60).padStart(2, '0');
-	return `${minutes}:${seconds}`;
-}
-
-function saveLeaderboardEntry(timeMs) {
-	const name = (nameInput && nameInput.value.trim()) || 'Anonymous';
-	const mode = (modeSelect && modeSelect.value) || 'easy';
-	const entry = { name, timeMs, mode, date: new Date().toISOString() };
-	const list = JSON.parse(localStorage.getItem('leaderboard') || '[]');
-	list.push(entry);
-	list.sort((a,b) => a.timeMs - b.timeMs);
-	const top10 = list.slice(0, 10);
-	localStorage.setItem('leaderboard', JSON.stringify(top10));
-	renderLeaderboard();
-}
-
-function renderLeaderboard() {
-	const listEl = document.getElementById('leaderboardList');
-	if (!listEl) return;
-	const list = JSON.parse(localStorage.getItem('leaderboard') || '[]');
-	listEl.innerHTML = '';
-	list.forEach((e, idx) => {
-		const li = document.createElement('li');
-		li.textContent = `${idx+1}. ${e.name} — ${formatMs(e.timeMs)} (${e.mode})`;
-		listEl.appendChild(li);
-	});
-}
-*/
 
 generateBtn.addEventListener('click', () => {
 	// get name
@@ -598,7 +651,9 @@ if (singlePlayerBtn && multiplayerBtn) {
 		multiplayerControls.style.display = 'none';
 		roomInfo.style.display = 'none';
 		leaderboard.style.display = 'none';
+		hideLobby();
 		currentRoomCode = null;
+		isHost = false;
 		if (socket) {
 			socket.disconnect();
 			socket = null;
@@ -647,6 +702,21 @@ if (joinRoomBtn) {
 		
 		socket = initSocket();
 		socket.emit('joinRoom', { roomCode, name });
+	});
+}
+
+// Start game (host only)
+const startGameBtn = document.getElementById('startGameBtn');
+if (startGameBtn) {
+	startGameBtn.addEventListener('click', () => {
+		if (!socket || !currentRoomCode || !isHost) {
+			alert('Only the host can start the game');
+			return;
+		}
+		
+		socket.emit('startGame', { roomCode: currentRoomCode });
+		startGameBtn.disabled = true;
+		startGameBtn.textContent = 'Starting...';
 	});
 }
 
