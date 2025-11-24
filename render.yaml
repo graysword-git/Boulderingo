@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: boulderingo-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://graysword.ca,https://www.graysword.ca
+    healthCheckPath: /health
+
