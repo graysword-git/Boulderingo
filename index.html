@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boulderingo</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+</head>
+<body data-backend-url="https://api.graysword.ca">
+  <div class="container" id="container">
+  
+    <h1>Boulderingo</h1>
+	<p>All challenges must be done on a Green tag or above unless specified</p>
+	<p>Only 1 challenge may be attempted at a time</p>
+	
+    <div class="input-section">
+      <label for="nameInput">Enter your name:</label>
+      <input type="text" id="nameInput" placeholder="Your name..." />
+      <div class="mode-row">
+        <label for="modeSelect">Mode:</label>
+        <select id="modeSelect">
+          <option value="easy" selected>Easy</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      
+      <div class="multiplayer-section">
+        <div class="game-mode-toggle">
+          <button id="singlePlayerBtn" class="mode-toggle active">Single Player</button>
+          <button id="multiplayerBtn" class="mode-toggle">Multiplayer</button>
+        </div>
+        
+        <div id="singlePlayerControls">
+          <button id="generateBtn">Generate Board</button>
+        </div>
+        
+        <div id="multiplayerControls" style="display: none;">
+          <button id="createRoomBtn">Create Room</button>
+          <div class="join-room-section">
+            <input type="text" id="roomCodeInput" placeholder="Enter room code (4 chars)" maxlength="4" style="text-transform: uppercase;" />
+            <button id="joinRoomBtn">Join Room</button>
+          </div>
+          <div id="roomInfo" style="display: none;">
+            <p><strong>Room Code:</strong> <span id="roomCodeDisplay"></span></p>
+            <p id="roomPlayers"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2 id="welcome"></h2>
+    <div id="timer" class="timer">00:00</div>
+
+    <div id="bingoBoard" class="board"></div>
+
+    <button id="verifyBtn">Verify</button>
+
+    <div id="leaderboard" class="leaderboard" style="display: none;">
+      <h3 id="leaderboardTitle">Leaderboard</h3>
+      <ol id="leaderboardList"></ol>
+    </div>
+
+	<div class="dropdown">
+		<p>Half & Half - left limb one route, right limb another route</p>
+		<p>E-limb-ination - repeat x3 with -1 limb each time</p>
+		<p>Eyes closed - honour system, open if you feel usntable</p>
+		<p>Flash - can be a day flash if you have climbed recently and are low on options</p>
+	</div>
+
+	<button id="exchangeBtn" onclick="exchangeTile()">Exchange</button>
+
+  <script src="script.js"></script>
+</body>
+</html>
