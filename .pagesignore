@@ -1,0 +1,9 @@
+# Files to ignore when deploying to Cloudflare Pages
+server.js
+package.json
+render.yaml
+node_modules/
+.gitignore
+README.md
+READ_ME.txt
+

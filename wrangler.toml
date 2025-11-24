@@ -1,0 +1,4 @@
+# This file prevents Cloudflare from auto-detecting as a Worker
+# For Pages deployment, this file can be ignored or removed
+# Pages projects don't use wrangler.toml
+
