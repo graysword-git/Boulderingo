@@ -1,6 +1,5 @@
 const nameInput = document.getElementById('nameInput');
 const generateBtn = document.getElementById('generateBtn');
-const resetBtn = document.getElementById('resetBtn');
 const bingoBoard = document.getElementById('bingoBoard');
 const welcome = document.getElementById('welcome');
 const exchangeBtn = document.getElementById('exchangeBtn');
@@ -85,7 +84,7 @@ function initSocket() {
 	
 	// Backend URL can be set via data-backend-url attribute in HTML
 	// For local development: leave empty to auto-detect localhost
-	// For production: set to your Railway backend URL (e.g., "https://your-app.up.railway.app")
+	// For production: set to your backend URL (e.g., "https://boulderingo.onrender.com")
 	const backendUrl = (document.body.dataset.backendUrl || '').trim();
 	
 	// Determine server URL
@@ -98,8 +97,8 @@ function initSocket() {
 		serverUrl = 'http://localhost:3000';
 	} else {
 		// Production - if no backend URL set, try same origin (won't work if backend is on different domain)
-		// You should set data-backend-url attribute with your Railway URL
-		console.warn('No backend URL configured. Set data-backend-url attribute in <body> tag with your Railway backend URL.');
+		// You should set data-backend-url attribute with your backend URL
+		console.warn('No backend URL configured. Set data-backend-url attribute in <body> tag with your backend URL.');
 		serverUrl = window.location.origin;
 	}
 	
@@ -113,91 +112,147 @@ function initSocket() {
 		console.log('Disconnected from server');
 	});
 	
-	socket.on('roomCreated', ({ roomCode, mode, isHost: hostStatus, players }) => {
+	// Helper: Setup lobby UI (used by both roomCreated and roomJoined)
+	function setupLobbyUI(roomCode, mode, isHost, players) {
 		currentRoomCode = roomCode;
-		isHost = hostStatus;
+		isHost = isHost;
 		lobbyPlayers = players;
 		roomCodeDisplay.textContent = roomCode;
 		roomInfo.style.display = 'block';
-		
-		// Set mode
 		modeSelect.value = mode;
-		
-		// Show lobby UI
-		showLobby(players, hostStatus);
+		showLobby(players, isHost);
+	}
+	
+	// Both roomCreated and roomJoined do the same thing - merge handlers
+	socket.on('roomCreated', ({ roomCode, mode, isHost, players }) => {
+		setupLobbyUI(roomCode, mode, isHost, players);
 	});
 	
-	socket.on('roomJoined', ({ roomCode, mode, isHost: hostStatus, players }) => {
-		currentRoomCode = roomCode;
-		isHost = hostStatus;
-		lobbyPlayers = players;
-		roomCodeDisplay.textContent = roomCode;
-		roomInfo.style.display = 'block';
-		
-		// Set mode
-		modeSelect.value = mode;
-		
-		// Show lobby UI
-		showLobby(players, hostStatus);
+	socket.on('roomJoined', ({ roomCode, mode, isHost, players }) => {
+		setupLobbyUI(roomCode, mode, isHost, players);
 	});
 	
 	socket.on('joinError', ({ message }) => {
 		alert(`Error: ${message}`);
 	});
 	
-	socket.on('playerJoined', ({ name, players }) => {
+	// Helper: Update lobby when player list changes
+	function handlePlayerListUpdate(name, players, action) {
 		lobbyPlayers = players;
 		updateLobbyPlayers(players);
-		console.log(`${name} joined the room`);
+		console.log(`${name} ${action} the room`);
+	}
+	
+	socket.on('playerJoined', ({ name, players }) => {
+		handlePlayerListUpdate(name, players, 'joined');
 	});
 	
 	socket.on('playerLeft', ({ name, players }) => {
-		lobbyPlayers = players;
-		updateLobbyPlayers(players);
-		console.log(`${name} left the room`);
+		handlePlayerListUpdate(name, players, 'left');
 	});
 	
-	socket.on('gameStarted', ({ roomCode, board, mode, startTime }) => {
+	socket.on('playerRejoined', ({ name, players }) => {
+		handlePlayerListUpdate(name, players, 'rejoined');
+	});
+	
+	// Helper: Setup game UI based on mode
+	function setupGameUI(mode, board, startTime, marked = null, lockedTilesData = null, lockCountsData = null, countdownMode = false, countdownEndTimeParam = null, leaderboardData = null) {
 		roomStartTime = startTime;
 		currentMode = mode;
 		
-		// Hide lobby, show game
+		// Hide lobby first
 		hideLobby();
 		
 		// Set mode and render board
 		modeSelect.value = mode;
 		
+		// Show common game elements
+		bingoBoard.style.display = 'grid';
+		timerEl.style.display = 'block';
+		
 		// Initialize lock-out mode
 		if (mode === 'lock-out') {
-			lockedTiles = new Map();
-			lockCounts = { myLocks: 0, opponentLocks: 0 };
+			if (lockedTilesData) {
+				lockedTiles = new Map(Object.entries(lockedTilesData).map(([key, value]) => [parseInt(key), value]));
+			} else {
+				lockedTiles = new Map();
+			}
+			if (lockCountsData) {
+				const myId = socket.id;
+				lockCounts.myLocks = lockCountsData[myId] || 0;
+				const opponentId = Object.keys(lockCountsData).find(id => id !== myId);
+				lockCounts.opponentLocks = opponentId ? (lockCountsData[opponentId] || 0) : 0;
+			} else {
+				lockCounts = { myLocks: 0, opponentLocks: 0 };
+			}
 			confirmingTileIndex = null;
-			verifyBtn.style.display = 'none'; // Hide verify button in lock-out mode
+			verifyBtn.style.display = 'none'; // Hide verify button
+			exchangeBtn.style.display = 'none'; // Hide exchange button
 			document.getElementById('lockOutStats').style.display = 'block';
 			updateLockStats();
+			
+			// Restore countdown if active
+			if (countdownMode && countdownEndTimeParam) {
+				countdownEndTime = countdownEndTimeParam; // Assign parameter to global variable
+				document.getElementById('countdownMode').style.display = 'block';
+				startCountdown();
+			} else {
+				document.getElementById('countdownMode').style.display = 'none';
+			}
+			document.getElementById('lockConfirm').style.display = 'none';
+			document.getElementById('recapLog').style.display = 'none';
+			leaderboard.style.display = 'none';
 		} else {
+			// Regular multiplayer mode (easy/hard)
 			verifyBtn.style.display = 'block';
+			exchangeBtn.style.display = 'block';
 			document.getElementById('lockOutStats').style.display = 'none';
+			document.getElementById('countdownMode').style.display = 'none';
+			document.getElementById('lockConfirm').style.display = 'none';
+			document.getElementById('recapLog').style.display = 'none';
+			leaderboard.style.display = 'block';
+			leaderboardTitle.textContent = 'Room Leaderboard';
+			if (leaderboardData && leaderboardData.length > 0) {
+				renderMultiplayerLeaderboard(leaderboardData.map((entry, index) => ({
+					position: index + 1,
+					name: entry.name,
+					elapsedMs: entry.elapsedMs
+				})));
+			} else {
+				leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
+			}
 		}
 		
-		renderBoard(board);
+		// Render board with marked tiles if provided
+		renderBoard(board, marked || []);
 		saveData(nameInput.value.trim(), board);
-		localStorage.removeItem('bingoMarked');
-		exchangeUsed = false;
-		localStorage.setItem('exchangeUsed', 'false');
+		
+		// Restore marked state if provided
+		if (marked && marked.length > 0) {
+			localStorage.setItem('bingoMarked', JSON.stringify(marked));
+		} else {
+			localStorage.removeItem('bingoMarked');
+		}
+		
+		// Reset exchange if starting fresh
+		if (!marked) {
+			exchangeUsed = false;
+			localStorage.setItem('exchangeUsed', 'false');
+		}
 		updateExchangeButtonState();
 		
 		// Start timer from room start time
 		timerStartMs = startTime;
 		updateTimer();
 		if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-		
-		// Show leaderboard (not in lock-out mode)
-		if (mode !== 'lock-out') {
-			leaderboard.style.display = 'block';
-			leaderboardTitle.textContent = 'Room Leaderboard';
-			leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
-		}
+	}
+	
+	socket.on('gameStarted', ({ roomCode, board, mode, startTime }) => {
+		setupGameUI(mode, board, startTime);
+	});
+	
+	socket.on('gameRejoined', ({ roomCode, board, mode, startTime, marked, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts, countdownMode, countdownEndTime, leaderboard: roomLeaderboard }) => {
+		setupGameUI(mode, board, startTime, marked, serverLockedTiles, serverLockCounts, countdownMode, countdownEndTime, roomLeaderboard);
 	});
 	
 	socket.on('startGameError', ({ message }) => {
@@ -335,12 +390,16 @@ function showLobby(players, hostStatus) {
 	isHost = hostStatus;
 	lobbyPlayers = players;
 	
-	// Hide game elements
+	// Hide ALL game elements
 	bingoBoard.style.display = 'none';
 	verifyBtn.style.display = 'none';
 	exchangeBtn.style.display = 'none';
 	leaderboard.style.display = 'none';
 	timerEl.style.display = 'none';
+	document.getElementById('lockOutStats').style.display = 'none';
+	document.getElementById('countdownMode').style.display = 'none';
+	document.getElementById('lockConfirm').style.display = 'none';
+	document.getElementById('recapLog').style.display = 'none';
 	
 	// Show lobby
 	const lobbyEl = document.getElementById('lobby');
@@ -356,12 +415,8 @@ function hideLobby() {
 	if (lobbyEl) {
 		lobbyEl.style.display = 'none';
 	}
-	
-	// Show game elements
-	bingoBoard.style.display = 'grid';
-	verifyBtn.style.display = 'block';
-	exchangeBtn.style.display = 'block';
-	timerEl.style.display = 'block';
+	// Don't show game elements here - let gameStarted/gameRejoined handlers do it
+	// This ensures proper mode-based visibility
 }
 
 function updateLobbyPlayers(players) {
@@ -753,8 +808,6 @@ if (verifyBtn) {
 				// highlight line
 				const lines = getWinningLines();
 				highlightWinningLines(lines);
-				// save leaderboard using precise ms if available
-				// leaderboard disabled for now
 				alert(`🎉 You win! 🎉\nTime: ${finalTime}`);
 				return;
 			}
@@ -963,4 +1016,3 @@ if (cancelLockBtn) {
 }
 
 window.addEventListener('load', loadData);
-// window.addEventListener('load', renderLeaderboard); // leaderboard disabled for now

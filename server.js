@@ -5,10 +5,10 @@ const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-// Configure CORS - update with your frontend domain in production
+// Configure CORS - allowed origins for Socket.io connections
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ["https://graysword.ca", "https://www.graysword.ca", "http://localhost:3000"]; // Removed wildcard for security
+  : ["https://graysword.ca", "https://www.graysword.ca", "http://localhost:3000"];
 
 const io = new Server(server, {
   cors: {
@@ -21,7 +21,7 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
-// Serve static files (for local development)
+// Serve static files (for local development only - production uses Cloudflare Pages)
 app.use(express.static(__dirname));
 
 // Health check endpoint (moved after static files)
@@ -142,6 +142,38 @@ function validateRoomAccess(socket, roomCode) {
   }
   
   return { valid: true, room, roomCode: normalizedCode };
+}
+
+// Helper: Create a new player object
+function createPlayer(socketId, name) {
+  return {
+    id: socketId,
+    name: name,
+    marked: [],
+    finished: false,
+    finishTime: null
+  };
+}
+
+// Helper: Send lobby state to a player
+function sendLobbyState(socket, room, isHost) {
+  socket.emit(isHost ? 'roomCreated' : 'roomJoined', {
+    roomCode: room.code,
+    mode: room.mode,
+    isHost: isHost,
+    players: getPlayerList(room)
+  });
+}
+
+// Helper: Broadcast player list update to all players in room
+function broadcastPlayerListUpdate(io, roomCode, eventName, additionalData = {}) {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+  
+  io.to(roomCode).emit(eventName, {
+    ...additionalData,
+    players: getPlayerList(room)
+  });
 }
 
 // Simple rate limiting
@@ -348,24 +380,13 @@ io.on('connection', (socket) => {
       lastActivity: Date.now()
     };
     
-    room.players.set(socket.id, {
-      id: socket.id,
-      name: name,
-      marked: [],
-      finished: false,
-      finishTime: null
-    });
+    room.players.set(socket.id, createPlayer(socket.id, name));
     
     rooms.set(roomCode, room);
     socket.join(roomCode);
     
     // Send lobby state to creator
-    socket.emit('roomCreated', {
-      roomCode: roomCode,
-      mode: mode,
-      isHost: true,
-      players: getPlayerList(room)
-    });
+    sendLobbyState(socket, room, true);
     
     console.log(`Room ${roomCode} created by ${name} (lobby)`);
   });
@@ -385,6 +406,7 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // Upercase and trimmed
     const room = rooms.get(normalizedCode);
     if (!room) {
       socket.emit('joinError', { message: 'Room not found' });
@@ -394,10 +416,48 @@ io.on('connection', (socket) => {
     // Update last activity
     room.lastActivity = Date.now();
     
-    // Check if game has already started
+    // Check if game has already started - allow rejoin if player was already in room
     if (room.status === 'in-game') {
-      socket.emit('joinError', { message: 'Game has already started' });
-      return;
+      // Check if player was already in the room (by name)
+      const existingPlayer = Array.from(room.players.values()).find(p => p.name === name);
+      if (existingPlayer) {
+        // Player was in the room - allow rejoin
+        // Remove old socket.id entry and add new one
+        room.players.delete(existingPlayer.id);
+        room.players.set(socket.id, {
+          id: socket.id,
+          name: name,
+          marked: existingPlayer.marked, // Preserve their marked tiles
+          finished: existingPlayer.finished,
+          finishTime: existingPlayer.finishTime
+        });
+        
+        socket.join(normalizedCode);
+        
+        // Send current game state
+        socket.emit('gameRejoined', {
+          roomCode: normalizedCode,
+          board: room.board,
+          mode: room.mode,
+          startTime: room.startTime,
+          marked: existingPlayer.marked,
+          lockedTiles: room.mode === 'lock-out' ? Object.fromEntries(room.lockedTiles) : null,
+          lockCounts: room.mode === 'lock-out' ? getLockCounts(room) : null,
+          countdownMode: room.mode === 'lock-out' ? room.countdownMode : false,
+          countdownEndTime: room.mode === 'lock-out' ? room.countdownEndTime : null,
+          leaderboard: room.leaderboard || []
+        });
+        
+        // Notify other players
+        broadcastPlayerListUpdate(io, normalizedCode, 'playerRejoined', { name: name });
+        
+        console.log(`${name} rejoined room ${normalizedCode} (in-game)`);
+        return;
+      } else {
+        // New player trying to join active game - block it
+        socket.emit('joinError', { message: 'Game has already started' });
+        return;
+      }
     }
     
     // Lock-out mode: only allow 2 players
@@ -406,35 +466,20 @@ io.on('connection', (socket) => {
       return;
     }
     
-    // Check if player already in room
+    // Check if player already in room (by socket.id)
     if (room.players.has(socket.id)) {
       socket.emit('joinError', { message: 'Already in this room' });
       return;
     }
     
-    room.players.set(socket.id, {
-      id: socket.id,
-      name: name,
-      marked: [],
-      finished: false,
-      finishTime: null
-    });
-    
+    room.players.set(socket.id, createPlayer(socket.id, name));
     socket.join(normalizedCode);
     
     // Send lobby state to joiner
-    socket.emit('roomJoined', {
-      roomCode: normalizedCode,
-      mode: room.mode,
-      isHost: false,
-      players: getPlayerList(room)
-    });
+    sendLobbyState(socket, room, false);
     
     // Notify all players in room about the new player
-    io.to(normalizedCode).emit('playerJoined', {
-      name: name,
-      players: getPlayerList(room)
-    });
+    broadcastPlayerListUpdate(io, normalizedCode, 'playerJoined', { name: name });
     
     console.log(`${name} joined room ${normalizedCode} (lobby)`);
   });
@@ -831,10 +876,7 @@ io.on('connection', (socket) => {
         }
         
         // Notify other players
-        socket.to(code).emit('playerLeft', {
-          name: player.name,
-          players: getPlayerList(room)
-        });
+        broadcastPlayerListUpdate(io, code, 'playerLeft', { name: player.name });
         
         // Clean up empty rooms
         if (room.players.size === 0) {
