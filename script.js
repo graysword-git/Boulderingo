@@ -159,6 +159,43 @@ function isLockOutMode() {
   return lockoutRadio && lockoutRadio.checked;
 }
 
+// Centralized function to update game action buttons (Verify/Exchange) visibility
+// This ensures buttons are only visible when:
+// - A game is in progress (board is displayed)
+// - NOT in lockout mode
+function updateGameActionButtons() {
+  // Check if board is visible - check both inline style and if board has content
+  // Board is visible if: display is 'grid' OR board has children (cells) and is not explicitly hidden
+  const boardHasContent = bingoBoard && bingoBoard.children.length > 0;
+  const boardDisplayStyle = bingoBoard ? bingoBoard.style.display : '';
+  const boardIsHidden = boardDisplayStyle === 'none';
+  const boardVisible = boardHasContent && !boardIsHidden;
+  
+  // Check if in lockout mode (single player or multiplayer)
+  const isLockout = isLockOutMode() || 
+                    (isMultiplayer && currentMode && 
+                     (currentMode === 'lock-out' || (typeof currentMode === 'string' && currentMode.startsWith('lock-out-'))));
+  
+  // Buttons should only be visible when board is visible AND not in lockout mode
+  const shouldShow = boardVisible && !isLockout;
+  
+  // Update verify button
+  if (verifyBtn) {
+    toggleVisibility(verifyBtn, shouldShow);
+    if (shouldShow) {
+      verifyBtn.style.display = 'inline-block';
+    }
+  }
+  
+  // Update exchange button
+  if (exchangeBtn) {
+    toggleVisibility(exchangeBtn, shouldShow);
+    if (shouldShow) {
+      exchangeBtn.style.display = 'inline-block';
+    }
+  }
+}
+
 // Get current min grade
 function getCurrentMinGrade() {
   return minGradeSelect ? minGradeSelect.value : 'green';
@@ -182,7 +219,7 @@ if (lockoutRadio && normalRadio) {
 // Hide lockout toggle on initial load (single player is default)
 const lockoutToggle = document.getElementById('lockoutToggle');
 if (lockoutToggle) {
-  lockoutToggle.style.display = 'none';
+  toggleVisibility(lockoutToggle, false, true); // Use hidden-layout to maintain height
 }
 
 // Initialize Socket.io connection
@@ -225,7 +262,7 @@ function initSocket() {
 		isHost = isHost;
 		lobbyPlayers = players;
 		roomCodeDisplay.textContent = roomCode;
-		roomInfo.style.display = 'block';
+		toggleVisibility(roomInfo, true);
 		
 		// Update UI to match room settings
 		// Check if mode is lock-out (could be 'lock-out', 'lock-out-easy', or 'lock-out-hard')
@@ -330,8 +367,14 @@ function initSocket() {
 		updateModeUI(); // Disable/enable controls
 		
 		// Show common game elements
-		bingoBoard.style.display = 'grid';
-		timerEl.style.display = 'block';
+		if (bingoBoard) {
+			bingoBoard.style.display = 'grid';
+			bingoBoard.classList.remove('hidden', 'hidden-layout');
+		}
+		if (timerEl) {
+			toggleVisibility(timerEl, true);
+			timerEl.style.display = 'block'; // Timer needs block display
+		}
 		
 		// Initialize lock-out mode (check if mode is lock-out variant)
 		if (isLockoutMode) {
@@ -349,31 +392,29 @@ function initSocket() {
 				lockCounts = { myLocks: 0, opponentLocks: 0 };
 			}
 			confirmingTileIndex = null;
-			verifyBtn.style.display = 'none'; // Hide verify button
-			exchangeBtn.style.display = 'none'; // Hide exchange button
-			document.getElementById('lockOutStats').style.display = 'block';
+			updateGameActionButtons(); // Hide verify/exchange buttons in lockout mode
+			toggleVisibility(document.getElementById('lockOutStats'), true);
 			updateLockStats();
 			
 			// Restore countdown if active
 			if (countdownMode && countdownEndTimeParam) {
 				countdownEndTime = countdownEndTimeParam; // Assign parameter to global variable
-				document.getElementById('countdownMode').style.display = 'block';
+				toggleVisibility(document.getElementById('countdownMode'), true);
 				startCountdown();
 			} else {
-				document.getElementById('countdownMode').style.display = 'none';
+				toggleVisibility(document.getElementById('countdownMode'), false);
 			}
-			document.getElementById('lockConfirm').style.display = 'none';
-			document.getElementById('recapLog').style.display = 'none';
-			leaderboard.style.display = 'none';
+			toggleVisibility(document.getElementById('lockConfirm'), false);
+			toggleVisibility(document.getElementById('recapLog'), false);
+			toggleVisibility(leaderboard, false);
 		} else {
 			// Regular multiplayer mode (easy/hard)
-			verifyBtn.style.display = 'block';
-			exchangeBtn.style.display = 'block';
-			document.getElementById('lockOutStats').style.display = 'none';
-			document.getElementById('countdownMode').style.display = 'none';
-			document.getElementById('lockConfirm').style.display = 'none';
-			document.getElementById('recapLog').style.display = 'none';
-			leaderboard.style.display = 'block';
+			updateGameActionButtons(); // Show verify/exchange buttons in normal mode
+			toggleVisibility(document.getElementById('lockOutStats'), false);
+			toggleVisibility(document.getElementById('countdownMode'), false);
+			toggleVisibility(document.getElementById('lockConfirm'), false);
+			toggleVisibility(document.getElementById('recapLog'), false);
+			toggleVisibility(leaderboard, true);
 			leaderboardTitle.textContent = 'Room Leaderboard';
 			if (leaderboardData && leaderboardData.length > 0) {
 				renderMultiplayerLeaderboard(leaderboardData.map((entry, index) => ({
@@ -403,6 +444,7 @@ function initSocket() {
 			localStorage.setItem('exchangeUsed', 'false');
 		}
 		updateExchangeButtonState();
+		updateGameActionButtons(); // Update button visibility after game setup
 		
 		// Start timer from room start time
 		timerStartMs = startTime;
@@ -554,30 +596,26 @@ function showLobby(players, hostStatus) {
 	lobbyPlayers = players;
 	
 	// Hide ALL game elements
-	bingoBoard.style.display = 'none';
-	verifyBtn.style.display = 'none';
-	exchangeBtn.style.display = 'none';
-	leaderboard.style.display = 'none';
-	timerEl.style.display = 'none';
-	document.getElementById('lockOutStats').style.display = 'none';
-	document.getElementById('countdownMode').style.display = 'none';
-	document.getElementById('lockConfirm').style.display = 'none';
-	document.getElementById('recapLog').style.display = 'none';
+	toggleVisibility(bingoBoard, false);
+	updateGameActionButtons(); // Hide buttons when in lobby
+	toggleVisibility(leaderboard, false);
+	toggleVisibility(timerEl, false);
+	toggleVisibility(document.getElementById('lockOutStats'), false);
+	toggleVisibility(document.getElementById('countdownMode'), false);
+	toggleVisibility(document.getElementById('lockConfirm'), false);
+	toggleVisibility(document.getElementById('recapLog'), false);
 	
 	// Show lobby
 	const lobbyEl = document.getElementById('lobby');
 	if (lobbyEl) {
-		lobbyEl.style.display = 'block';
+		toggleVisibility(lobbyEl, true);
 		updateLobbyPlayers(players);
 		updateStartGameButton();
 	}
 }
 
 function hideLobby() {
-	const lobbyEl = document.getElementById('lobby');
-	if (lobbyEl) {
-		lobbyEl.style.display = 'none';
-	}
+	toggleVisibility(document.getElementById('lobby'), false);
 	// Don't show game elements here - let gameStarted/gameRejoined handlers do it
 	// This ensures proper mode-based visibility
 }
@@ -611,12 +649,14 @@ function updateStartGameButton() {
 	const startGameBtn = document.getElementById('startGameBtn');
 	const waitingForHost = document.getElementById('waitingForHost');
 	if (startGameBtn) {
-		startGameBtn.style.display = isHost ? 'block' : 'none';
+		toggleVisibility(startGameBtn, isHost);
+		if (isHost) startGameBtn.style.display = 'block';
 		startGameBtn.disabled = false;
 		startGameBtn.textContent = 'Start Game';
 	}
 	if (waitingForHost) {
-		waitingForHost.style.display = isHost ? 'none' : 'block';
+		toggleVisibility(waitingForHost, !isHost);
+		if (!isHost) waitingForHost.style.display = 'block';
 	}
 }
 
@@ -719,7 +759,8 @@ function setupChallengeTooltip(cell, challengeText) {
 		
 		tooltipTitle.textContent = challengeText;
 		tooltipText.textContent = explanation;
-		tooltip.style.display = 'block';
+		toggleVisibility(tooltip, true);
+		tooltip.style.display = 'block'; // Tooltip needs specific positioning
 		
 		// Position tooltip near the cell
 		const rect = cell.getBoundingClientRect();
@@ -753,7 +794,7 @@ function setupChallengeTooltip(cell, challengeText) {
 	
 	function hideTooltip() {
 		if (tooltip) {
-			tooltip.style.display = 'none';
+			toggleVisibility(tooltip, false);
 		}
 		if (currentTooltipCell === cell) {
 			currentTooltipCell = null;
@@ -962,8 +1003,16 @@ function loadData() {
 	exchangeUsed = localStorage.getItem('exchangeUsed') === 'true';
 	if (name) nameInput.value = name;
 	if (name) welcome.textContent = `Welcome, ${name}!`;
-	if (board) renderBoard(board, marked);
+	if (board) {
+		// Ensure board is visible before rendering
+		if (bingoBoard) {
+			bingoBoard.style.display = 'grid';
+			bingoBoard.classList.remove('hidden', 'hidden-layout');
+		}
+		renderBoard(board, marked);
+	}
 	updateExchangeButtonState();
+	updateGameActionButtons(); // Update button visibility after loading board
 
 	// restore timer state
 	const timerRunning = localStorage.getItem('timerRunning') === 'true';
@@ -1152,12 +1201,18 @@ generateBtn.addEventListener('click', () => {
 
 	// proceed normally
 	const board = generateBoard();
+	// Ensure board is visible before rendering
+	if (bingoBoard) {
+		bingoBoard.style.display = 'grid';
+		bingoBoard.classList.remove('hidden', 'hidden-layout');
+	}
 	renderBoard(board);
 	saveData(name, board);
 	localStorage.removeItem('bingoMarked');
 	exchangeUsed = false;
 	localStorage.setItem('exchangeUsed', 'false');
 	updateExchangeButtonState();
+	updateGameActionButtons(); // Show buttons after generating board
 	welcome.textContent = `Welcome, ${name}!`;
 	startTimer();
 });
@@ -1192,26 +1247,95 @@ if (verifyBtn) {
 }
 
 // Game mode toggle
+// Helper function to maintain section height when switching between single/multiplayer
+function maintainControlsHeight() {
+	const section = document.querySelector('.multiplayer-section');
+	if (!section) return;
+	
+	// Temporarily show both to measure their heights
+	const singleWasHidden = singlePlayerControls && (singlePlayerControls.classList.contains('hidden') || singlePlayerControls.classList.contains('hidden-layout'));
+	const multiWasHidden = multiplayerControls && (multiplayerControls.classList.contains('hidden') || multiplayerControls.classList.contains('hidden-layout'));
+	
+	// Temporarily show to measure (use inline styles for measurement only)
+	if (singleWasHidden && singlePlayerControls) {
+		singlePlayerControls.classList.remove('hidden', 'hidden-layout');
+		singlePlayerControls.style.visibility = 'hidden';
+		singlePlayerControls.style.position = 'absolute';
+	}
+	if (multiWasHidden && multiplayerControls) {
+		multiplayerControls.classList.remove('hidden', 'hidden-layout');
+		multiplayerControls.style.visibility = 'hidden';
+		multiplayerControls.style.position = 'absolute';
+	}
+	
+	// Force a reflow to ensure measurements are accurate
+	section.offsetHeight;
+	
+	// Measure both containers
+	const singleHeight = singlePlayerControls ? singlePlayerControls.offsetHeight : 0;
+	const multiHeight = multiplayerControls ? multiplayerControls.offsetHeight : 0;
+	
+	// Restore original state
+	if (singleWasHidden && singlePlayerControls) {
+		singlePlayerControls.style.removeProperty('visibility');
+		singlePlayerControls.style.removeProperty('position');
+		singlePlayerControls.classList.add('hidden-layout');
+	}
+	if (multiWasHidden && multiplayerControls) {
+		multiplayerControls.style.removeProperty('visibility');
+		multiplayerControls.style.removeProperty('position');
+		multiplayerControls.classList.add('hidden-layout');
+	}
+	
+	// Set min-height to the maximum of both to prevent shrinking
+	const maxHeight = Math.max(singleHeight, multiHeight);
+	if (maxHeight > 0) {
+		// Add space for toggle and lockout toggle
+		const toggleHeight = document.querySelector('.game-mode-toggle')?.offsetHeight || 0;
+		const lockoutHeight = document.getElementById('lockoutToggle')?.offsetHeight || 0;
+		section.style.minHeight = `${toggleHeight + lockoutHeight + maxHeight + 30}px`;
+	}
+}
+
+// Helper function to toggle visibility using classes (simpler than inline styles)
+function toggleVisibility(element, show, useLayoutFlow = false) {
+	if (!element) return;
+	if (show) {
+		element.classList.remove('hidden', 'hidden-layout');
+		// Remove inline display style that might override classes
+		element.style.removeProperty('display');
+	} else {
+		element.classList.remove('hidden', 'hidden-layout');
+		element.classList.add(useLayoutFlow ? 'hidden-layout' : 'hidden');
+	}
+	// Update section height after visibility change if it's a control container
+	// Only use setTimeout for dynamic changes, not initial load
+	if (useLayoutFlow && (element === singlePlayerControls || element === multiplayerControls)) {
+		// Check if we're in initialization phase (no need for setTimeout)
+		if (document.readyState === 'loading') {
+			maintainControlsHeight();
+		} else {
+			// Use setTimeout to ensure DOM has updated for dynamic changes
+			setTimeout(maintainControlsHeight, 0);
+		}
+	}
+}
+
 if (singlePlayerBtn && multiplayerBtn) {
 	singlePlayerBtn.addEventListener('click', () => {
 		isMultiplayer = false;
 		singlePlayerBtn.classList.add('active');
 		multiplayerBtn.classList.remove('active');
-		singlePlayerControls.style.display = 'block';
-		multiplayerControls.style.display = 'none';
 		
-		// Hide lockout toggle (only shown in multiplayer)
-		// Use visibility to preserve layout space and prevent button shifting
-		const lockoutToggle = document.getElementById('lockoutToggle');
-		if (lockoutToggle) {
-			lockoutToggle.style.display = 'none';
-			lockoutToggle.style.visibility = 'hidden';
-			lockoutToggle.style.height = '0';
-			lockoutToggle.style.margin = '0';
-			lockoutToggle.style.padding = '0';
-		}
-		roomInfo.style.display = 'none';
-		leaderboard.style.display = 'none';
+		// Toggle controls - use hidden-layout to maintain section height
+		toggleVisibility(singlePlayerControls, true);
+		toggleVisibility(multiplayerControls, false, true);
+		toggleVisibility(lockoutToggle, false, true);
+		// Maintain section height
+		maintainControlsHeight();
+		
+		toggleVisibility(roomInfo, false);
+		toggleVisibility(leaderboard, false);
 		hideLobby();
 		currentRoomCode = null;
 		isHost = false;
@@ -1223,10 +1347,10 @@ if (singlePlayerBtn && multiplayerBtn) {
 		}
 		
 		// Hide multiplayer-specific UI
-		document.getElementById('lockOutStats').style.display = 'none';
-		document.getElementById('countdownMode').style.display = 'none';
-		document.getElementById('lockConfirm').style.display = 'none';
-		document.getElementById('recapLog').style.display = 'none';
+		toggleVisibility(document.getElementById('lockOutStats'), false);
+		toggleVisibility(document.getElementById('countdownMode'), false);
+		toggleVisibility(document.getElementById('lockConfirm'), false);
+		toggleVisibility(document.getElementById('recapLog'), false);
 		
 		// Reset game mode to single player (not lock-out)
 		currentMode = null;
@@ -1234,17 +1358,9 @@ if (singlePlayerBtn && multiplayerBtn) {
 		lockCounts = { myLocks: 0, opponentLocks: 0 };
 		confirmingTileIndex = null;
 		
-		// Show single player UI elements
-		if (verifyBtn) {
-			verifyBtn.style.display = 'block';
-			verifyBtn.style.removeProperty('text-align');
-			verifyBtn.style.removeProperty('margin');
-		}
-		if (exchangeBtn) {
-			exchangeBtn.style.display = 'block';
-			exchangeBtn.style.removeProperty('text-align');
-			exchangeBtn.style.removeProperty('margin');
-		}
+		// Update button visibility (will hide buttons since board not visible yet)
+		// Will be updated again after board is restored if it exists
+		updateGameActionButtons();
 		
 		// Restore single player board if it exists in localStorage
 		const savedBoard = localStorage.getItem('bingoBoard');
@@ -1256,6 +1372,7 @@ if (singlePlayerBtn && multiplayerBtn) {
 					// Restore the board - ensure display is set BEFORE rendering
 					if (bingoBoard) {
 						bingoBoard.style.display = 'grid';
+						bingoBoard.classList.remove('hidden', 'hidden-layout');
 						renderBoard(board, marked);
 						
 						// Restore timer state (same logic as loadData)
@@ -1267,7 +1384,10 @@ if (singlePlayerBtn && multiplayerBtn) {
 							timerStartMs = parseInt(storedStart, 10);
 							updateTimer();
 							if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-							if (timerEl) timerEl.style.display = 'block';
+							if (timerEl) {
+								toggleVisibility(timerEl, true);
+								timerEl.style.display = 'block';
+							}
 						} else if (!timerRunning && storedElapsed) {
 							// Show final elapsed without running
 							const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
@@ -1275,16 +1395,21 @@ if (singlePlayerBtn && multiplayerBtn) {
 							const seconds = String(totalSeconds % 60).padStart(2, '0');
 							if (timerEl) {
 								timerEl.textContent = `${minutes}:${seconds}`;
+								toggleVisibility(timerEl, true);
 								timerEl.style.display = 'block';
 							}
 						} else {
 							// No timer state, start fresh
-							if (timerEl) timerEl.style.display = 'block';
+							if (timerEl) {
+								toggleVisibility(timerEl, true);
+								timerEl.style.display = 'block';
+							}
 						}
 						
 						// Restore exchange button state
 						exchangeUsed = localStorage.getItem('exchangeUsed') === 'true';
 						updateExchangeButtonState();
+						updateGameActionButtons(); // Update button visibility after restoring board
 						
 						// Show welcome message
 						const name = localStorage.getItem('bingoName') || '';
@@ -1297,7 +1422,7 @@ if (singlePlayerBtn && multiplayerBtn) {
 					console.warn('Invalid board in localStorage, clearing. Board length:', board ? board.length : 'null');
 					localStorage.removeItem('bingoBoard');
 					if (bingoBoard) {
-						bingoBoard.style.display = 'none';
+						toggleVisibility(bingoBoard, false);
 						bingoBoard.innerHTML = '';
 					}
 				}
@@ -1306,14 +1431,14 @@ if (singlePlayerBtn && multiplayerBtn) {
 				// If restoration fails, clear localStorage and show empty state
 				localStorage.removeItem('bingoBoard');
 				if (bingoBoard) {
-					bingoBoard.style.display = 'none';
+					toggleVisibility(bingoBoard, false);
 					bingoBoard.innerHTML = '';
 				}
 			}
 		} else {
 			// No saved board, hide the board
 			if (bingoBoard) {
-				bingoBoard.style.display = 'none';
+				toggleVisibility(bingoBoard, false);
 				bingoBoard.innerHTML = '';
 			}
 		}
@@ -1323,26 +1448,20 @@ if (singlePlayerBtn && multiplayerBtn) {
 		isMultiplayer = true;
 		multiplayerBtn.classList.add('active');
 		singlePlayerBtn.classList.remove('active');
-		singlePlayerControls.style.display = 'none';
-		multiplayerControls.style.display = 'block';
 		
-		// Show lockout toggle (only shown in multiplayer)
-		const lockoutToggle = document.getElementById('lockoutToggle');
-		if (lockoutToggle) {
-			lockoutToggle.style.display = 'flex';
-			lockoutToggle.style.visibility = 'visible';
-			lockoutToggle.style.removeProperty('height');
-			lockoutToggle.style.removeProperty('margin');
-			lockoutToggle.style.removeProperty('padding');
-		}
+		// Toggle controls - show multiplayer, hide single player
+		toggleVisibility(singlePlayerControls, false, true);
+		toggleVisibility(multiplayerControls, true);
+		toggleVisibility(lockoutToggle, true);
+		// Maintain section height
+		maintainControlsHeight();
 		
 		// Reset single player game state
-		bingoBoard.style.display = 'none';
+		toggleVisibility(bingoBoard, false);
 		bingoBoard.innerHTML = '';
-		verifyBtn.style.display = 'none';
-		exchangeBtn.style.display = 'none';
-		leaderboard.style.display = 'none';
-		timerEl.style.display = 'none';
+		updateGameActionButtons(); // Hide buttons when switching to multiplayer
+		toggleVisibility(leaderboard, false);
+		toggleVisibility(timerEl, false);
 		stopTimer();
 		exchangeMode = false;
 		exchangeUsed = false;
@@ -1350,10 +1469,10 @@ if (singlePlayerBtn && multiplayerBtn) {
 		lockedTiles = new Map();
 		lockCounts = { myLocks: 0, opponentLocks: 0 };
 		confirmingTileIndex = null;
-		document.getElementById('lockOutStats').style.display = 'none';
-		document.getElementById('countdownMode').style.display = 'none';
-		document.getElementById('lockConfirm').style.display = 'none';
-		document.getElementById('recapLog').style.display = 'none';
+		toggleVisibility(document.getElementById('lockOutStats'), false);
+		toggleVisibility(document.getElementById('countdownMode'), false);
+		toggleVisibility(document.getElementById('lockConfirm'), false);
+		toggleVisibility(document.getElementById('recapLog'), false);
 		
 		// Hide lobby initially (will show when room is created/joined)
 		hideLobby();
@@ -1444,7 +1563,7 @@ function startTileConfirmation(tileIndex) {
 	if (cell) {
 		cell.classList.add('confirming');
 	}
-	document.getElementById('lockConfirm').style.display = 'block';
+	toggleVisibility(document.getElementById('lockConfirm'), true);
 }
 
 function cancelTileConfirmation() {
@@ -1455,7 +1574,7 @@ function cancelTileConfirmation() {
 		}
 		confirmingTileIndex = null;
 	}
-	document.getElementById('lockConfirm').style.display = 'none';
+	toggleVisibility(document.getElementById('lockConfirm'), false);
 }
 
 function confirmTileLock() {
@@ -1514,7 +1633,7 @@ function stopCountdown() {
 		clearInterval(countdownInterval);
 		countdownInterval = null;
 	}
-	document.getElementById('countdownMode').style.display = 'none';
+	toggleVisibility(document.getElementById('countdownMode'), false);
 }
 
 function showRecapLog(lockHistory) {
@@ -1527,7 +1646,7 @@ function showRecapLog(lockHistory) {
 	
 	if (!lockHistory || lockHistory.length === 0) {
 		recapList.innerHTML = '<li>No locks recorded</li>';
-		recapLog.style.display = 'block';
+		toggleVisibility(recapLog, true);
 		return;
 	}
 	
@@ -1541,7 +1660,7 @@ function showRecapLog(lockHistory) {
 		recapList.appendChild(li);
 	});
 	
-	recapLog.style.display = 'block';
+	toggleVisibility(recapLog, true);
 }
 
 // Set up confirmation button handlers
@@ -1559,7 +1678,7 @@ document.addEventListener('click', (e) => {
 	if (currentTooltipCell && !currentTooltipCell.contains(e.target)) {
 		const tooltip = document.getElementById('challengeTooltip');
 		if (tooltip && !tooltip.contains(e.target)) {
-			tooltip.style.display = 'none';
+			toggleVisibility(tooltip, false);
 		}
 		currentTooltipCell = null;
 	}
@@ -1569,7 +1688,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('scroll', () => {
 	const tooltip = document.getElementById('challengeTooltip');
 	if (tooltip) {
-		tooltip.style.display = 'none';
+		toggleVisibility(tooltip, false);
 	}
 	currentTooltipCell = null;
 }, true);
@@ -1577,25 +1696,30 @@ document.addEventListener('scroll', () => {
 // Initialize UI state on page load
 function initializeUIState() {
 	// Ensure single player controls are visible by default (single player is default)
-	if (singlePlayerControls) {
-		singlePlayerControls.style.display = 'block';
-	}
-	if (multiplayerControls) {
-		multiplayerControls.style.display = 'none';
-	}
+	toggleVisibility(singlePlayerControls, true);
+	toggleVisibility(multiplayerControls, false, true);
 	
-	// Ensure buttons have proper initial state (remove any inline styles that might cause shifts)
-	if (verifyBtn) {
-		verifyBtn.style.removeProperty('text-align');
-		verifyBtn.style.removeProperty('margin');
-	}
-	if (exchangeBtn) {
-		exchangeBtn.style.removeProperty('text-align');
-		exchangeBtn.style.removeProperty('margin');
-	}
+	// Hide elements that should be hidden by default
+	toggleVisibility(leaderboard, false);
+	toggleVisibility(document.getElementById('lobby'), false);
+	toggleVisibility(document.getElementById('lockOutStats'), false);
+	toggleVisibility(document.getElementById('countdownMode'), false);
+	toggleVisibility(document.getElementById('lockConfirm'), false);
+	toggleVisibility(document.getElementById('recapLog'), false);
+	toggleVisibility(document.getElementById('roomInfo'), false);
+	toggleVisibility(document.getElementById('challengeTooltip'), false);
+	
+	// Initialize button visibility state
+	updateGameActionButtons();
+	
+	// Calculate height IMMEDIATELY (synchronously) before page is visible
+	// This prevents any visible shift
+	maintainControlsHeight();
 }
 
-window.addEventListener('load', () => {
+// Use DOMContentLoaded for faster initialization (runs earlier than 'load')
+// This runs before images/stylesheets are fully loaded, allowing us to set height before render
+document.addEventListener('DOMContentLoaded', () => {
 	initializeUIState();
 	loadData();
 });

@@ -213,6 +213,14 @@ button {
   background-color: #9d4edd;
   color: white;
   transition: background 0.2s;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Control containers - ensure consistent spacing */
+#singlePlayerControls,
+#multiplayerControls {
+  margin-top: 0;
 }
 
 button:hover {
@@ -324,13 +332,91 @@ button:hover {
 /* Multiplayer UI */
 .multiplayer-section {
   margin-top: 15px;
+  /* Use grid to allow containers to overlay in same space */
+  display: grid;
+  grid-template-areas:
+    "toggle"
+    "lockout"
+    "controls";
 }
 
 .game-mode-toggle {
+  grid-area: toggle;
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
   justify-content: center;
+}
+
+#lockoutToggle {
+  grid-area: lockout;
+}
+
+/* Control containers - both occupy same grid area to maintain height */
+#singlePlayerControls,
+#multiplayerControls {
+  grid-area: controls;
+  margin-top: 0;
+}
+
+/* Unified visibility system - use classes instead of inline styles */
+/* Hide these elements by default (replaces inline styles) */
+#lockoutToggle,
+#multiplayerControls,
+#roomInfo,
+#challengeTooltip {
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* For elements that need to stay in layout flow (prevent shrinking)
+   Keep in grid but invisible - maintains grid cell height */
+.hidden-layout {
+  visibility: hidden !important;
+  pointer-events: none;
+  opacity: 0;
+  /* Keep in normal flow to maintain grid cell height */
+  position: relative;
+  height: auto;
+}
+
+/* When visible, ensure normal display - override default display: none */
+#singlePlayerControls:not(.hidden):not(.hidden-layout),
+#multiplayerControls:not(.hidden):not(.hidden-layout) {
+  display: block;
+  visibility: visible;
+  position: relative;
+  pointer-events: auto;
+  opacity: 1;
+  width: 100%;
+}
+
+/* Ensure buttons inside controls remain inline-block */
+#singlePlayerControls:not(.hidden):not(.hidden-layout) button,
+#multiplayerControls:not(.hidden):not(.hidden-layout) button {
+  display: inline-block;
+}
+
+#lockoutToggle:not(.hidden):not(.hidden-layout) {
+  display: flex;
+  visibility: visible;
+  pointer-events: auto;
+  opacity: 1;
+}
+
+/* Override default display: none for other elements when visible */
+#roomInfo:not(.hidden):not(.hidden-layout),
+#challengeTooltip:not(.hidden):not(.hidden-layout) {
+  display: block;
+}
+
+/* Leaderboard should only show when explicitly made visible (no default override) */
+#leaderboard.hidden,
+#leaderboard.hidden-layout {
+  display: none !important;
 }
 
 .mode-toggle {

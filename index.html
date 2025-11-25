@@ -54,7 +54,7 @@
         </div>
         
         <!-- Lock-out mode toggle (only shown in multiplayer) -->
-        <div class="lockout-toggle" id="lockoutToggle" style="display: none;">
+        <div class="lockout-toggle" id="lockoutToggle">
           <label>
             <input type="radio" name="gameType" id="normalRadio" value="normal" checked />
             Normal Mode
@@ -69,13 +69,13 @@
           <button id="generateBtn">Generate Board</button>
         </div>
         
-        <div id="multiplayerControls" style="display: none;">
+        <div id="multiplayerControls">
           <button id="createRoomBtn">Create Room</button>
           <div class="join-room-section">
             <input type="text" id="roomCodeInput" placeholder="Enter room code (4 chars)" maxlength="4" style="text-transform: uppercase;" />
             <button id="joinRoomBtn">Join Room</button>
           </div>
-          <div id="roomInfo" style="display: none;">
+          <div id="roomInfo">
             <p><strong>Room Code:</strong> <span id="roomCodeDisplay"></span></p>
             <p id="roomPlayers"></p>
           </div>
@@ -118,13 +118,13 @@
 
     <button id="verifyBtn">Verify</button>
 
-    <div id="leaderboard" class="leaderboard" style="display: none;">
+    <div id="leaderboard" class="leaderboard">
       <h3 id="leaderboardTitle">Leaderboard</h3>
       <ol id="leaderboardList"></ol>
     </div>
 
 	<!-- Challenge tooltip -->
-	<div id="challengeTooltip" class="challenge-tooltip" style="display: none;">
+	<div id="challengeTooltip" class="challenge-tooltip">
 		<div class="tooltip-content">
 			<h4 id="tooltipTitle"></h4>
 			<p id="tooltipText"></p>
