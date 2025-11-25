@@ -42,11 +42,20 @@ const rateLimits = new Map(); // socket.id:event → {count, resetTime}
 // Input validation functions
 function sanitizeName(name) {
   if (!name || typeof name !== 'string') return 'Anonymous';
+  
+  // Remove HTML tags first (handles both complete and partial tags)
+  name = name.replace(/<[^>]*>/g, ''); // Remove complete HTML tags
+  name = name.replace(/[<>]/g, ''); // Remove any remaining < or > characters
+  
+  // Trim whitespace
   name = name.trim();
+  
+  // Check if empty after all sanitization
   if (name.length === 0) return 'Anonymous';
+  
+  // Limit length
   if (name.length > 20) name = name.substring(0, 20);
-  // Remove HTML tags to prevent XSS
-  name = name.replace(/<[^>]*>/g, '');
+  
   return name;
 }
 
@@ -64,9 +73,27 @@ function validateMarkedArray(marked) {
   });
 }
 
-const VALID_MODES = ['easy', 'hard', 'lock-out'];
+const VALID_MODES = ['easy', 'hard', 'lock-out', 'lock-out-easy', 'lock-out-hard'];
 function validateMode(mode) {
   return VALID_MODES.includes(mode) ? mode : 'easy';
+}
+
+// Helper function to check if a mode is lock-out mode
+function isLockOutMode(mode) {
+  return mode === 'lock-out' || mode === 'lock-out-easy' || mode === 'lock-out-hard';
+}
+
+// Helper function to extract the base mode (easy/hard) from lock-out modes
+function getBaseMode(mode) {
+  if (mode === 'lock-out-easy') return 'easy';
+  if (mode === 'lock-out-hard') return 'hard';
+  if (mode === 'lock-out') return 'easy'; // Default for old lock-out mode
+  return mode; // 'easy' or 'hard'
+}
+
+const VALID_GRADES = ['pink', 'yellow', 'green', 'orange', 'blue'];
+function validateMinGrade(minGrade) {
+  return VALID_GRADES.includes(minGrade) ? minGrade : 'green';
 }
 
 // Bingo line constants
@@ -160,6 +187,7 @@ function sendLobbyState(socket, room, isHost) {
   socket.emit(isHost ? 'roomCreated' : 'roomJoined', {
     roomCode: room.code,
     mode: room.mode,
+    minGrade: room.minGrade || 'green',
     isHost: isHost,
     players: getPlayerList(room)
   });
@@ -207,15 +235,15 @@ setInterval(() => {
 
 // Challenge pools (same as frontend)
 const CHALLENGES = [
-  "Pink -7 holds",
-  "Yellow -5 holds",
-  "Green -3 holds",
+  "Pink tag -7 holds",
+  "Yellow tag -5 holds",
+  "Green tag -3 holds",
   "Bathang any hold",
   "Slab 🥰",
   "Dyno 🤮",
   "Scorpion every move",
   "Graysword Kilter 30°",
-  "Sloper deadhang 5s",
+  // "Sloper deadhang 5s" - Removed, generated dynamically based on mode
   "Climb, downclimb, climb",
   "Stacked feet",
   "Facing out start",
@@ -229,14 +257,14 @@ const CHALLENGES = [
   "Flash x3",
   "Eyes closed",
   "Half & Half",
-  "ALL Pinks b2b",
+  // "ALL Pinks b2b" - Removed, generated dynamically based on mode
   "1 Hand only",
   "No hands on a volume"
 ];
 
 const HARD_CHALLENGES = [
   "E-limb-ination",
-  "Orange -1 hold",
+  "Orange tag -1 hold",
   "Graysword Kilter 40°",
   "Campus",
   "Feet b4 hands"
@@ -257,18 +285,33 @@ function generateRoomCode() {
 }
 
 // Generate board (same logic as frontend)
-function generateBoard(mode = 'easy') {
-  const poolSource = mode === 'hard' ? [...CHALLENGES, ...HARD_CHALLENGES] : CHALLENGES;
-  const validItems = poolSource.filter(item => item.trim() !== "");
-  const pool = validItems.length >= 25
-    ? validItems
-    : [...validItems, ...Array(25 - validItems.length).fill("—")];
+function generateBoard(mode = 'easy', minGrade = 'green') {
+  // Extract base mode (easy/hard) from lock-out modes
+  const baseMode = getBaseMode(mode);
+  
+  let poolSource = baseMode === 'hard' ? [...CHALLENGES, ...HARD_CHALLENGES] : [...CHALLENGES];
+  
+  // Add dynamic "Pinks b2b" challenge based on mode
+  // Only add if minGrade is not pink (can't do pinks if pink is minimum)
+  if (minGrade !== 'pink') {
+    const pinksChallenge = baseMode === 'hard' ? "10 Pinks b2b" : "5 Pinks b2b";
+    poolSource.push(pinksChallenge);
+  }
+  
+  // Add dynamic "Sloper deadhang" challenge based on mode
+  const sloperChallenge = baseMode === 'hard' ? "Sloper deadhang 10s" : "Sloper deadhang 5s";
+  poolSource.push(sloperChallenge);
+  
+  const validItems = poolSource.filter(item => item.trim() !== "" && item !== "—");
+  // ensure min items - if we don't have enough, just use what we have (shouldn't happen with dynamic challenges)
+  const pool = validItems.length >= 25 ? validItems : validItems;
   
   const shuffled = [...pool].sort(() => 0.5 - Math.random());
-  const board = shuffled.slice(0, 25);
+  // select for board (take up to 25, or all if less)
+  const board = shuffled.slice(0, Math.min(25, shuffled.length));
   
-  // Only easy mode has FREE space (lock-out and hard modes don't)
-  if (mode === 'easy') {
+  // Only easy mode has FREE space (hard modes don't, lock-out modes don't use FREE)
+  if (baseMode === 'easy' && !isLockOutMode(mode)) {
     board[12] = 'FREE';
   }
   
@@ -337,7 +380,7 @@ setInterval(() => {
     }
     
     // Check countdown mode expiration
-    if (room.mode === 'lock-out' && room.countdownMode && room.countdownEndTime) {
+    if (isLockOutMode(room.mode) && room.countdownMode && room.countdownEndTime) {
       if (now >= room.countdownEndTime) {
         // Countdown expired - determine winner by most tiles locked
         handleCountdownEnd(room);
@@ -349,7 +392,7 @@ setInterval(() => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('createRoom', ({ name, mode }) => {
+  socket.on('createRoom', ({ name, mode, minGrade }) => {
     // Rate limiting
     if (!checkRateLimit(socket, 'createRoom', 5, 60000)) {
       socket.emit('createRoomError', { message: 'Too many requests. Please wait a moment.' });
@@ -358,7 +401,15 @@ io.on('connection', (socket) => {
     
     // Validate and sanitize inputs
     name = sanitizeName(name);
+    
+    // Double-check: if name is still empty or just whitespace after sanitization, reject
+    if (!name || name.trim().length === 0 || name === 'Anonymous') {
+      socket.emit('createRoomError', { message: 'Please enter a valid name' });
+      return;
+    }
+    
     mode = validateMode(mode);
+    minGrade = validateMinGrade(minGrade);
     
     const roomCode = generateRoomCode();
     
@@ -366,6 +417,7 @@ io.on('connection', (socket) => {
       code: roomCode,
       board: null, // Board not generated until game starts
       mode: mode,
+      minGrade: minGrade, // Minimum difficulty grade
       startTime: null, // Start time set when game starts
       status: 'lobby', // 'lobby' or 'in-game'
       hostId: socket.id, // Track who created the room
@@ -388,7 +440,7 @@ io.on('connection', (socket) => {
     // Send lobby state to creator
     sendLobbyState(socket, room, true);
     
-    console.log(`Room ${roomCode} created by ${name} (lobby)`);
+    console.log(`Room ${roomCode} created by ${name} (lobby, mode: ${mode}, minGrade: ${minGrade})`);
   });
 
   socket.on('joinRoom', ({ roomCode, name }) => {
@@ -400,6 +452,13 @@ io.on('connection', (socket) => {
     
     // Validate and sanitize inputs
     name = sanitizeName(name);
+    
+    // Double-check: if name is still empty or just whitespace after sanitization, reject
+    if (!name || name.trim().length === 0 || name === 'Anonymous') {
+      socket.emit('joinError', { message: 'Please enter a valid name' });
+      return;
+    }
+    
     const normalizedCode = normalizeRoomCode(roomCode);
     if (!normalizedCode) {
       socket.emit('joinError', { message: 'Invalid room code' });
@@ -439,12 +498,13 @@ io.on('connection', (socket) => {
           roomCode: normalizedCode,
           board: room.board,
           mode: room.mode,
+          minGrade: room.minGrade,
           startTime: room.startTime,
           marked: existingPlayer.marked,
-          lockedTiles: room.mode === 'lock-out' ? Object.fromEntries(room.lockedTiles) : null,
-          lockCounts: room.mode === 'lock-out' ? getLockCounts(room) : null,
-          countdownMode: room.mode === 'lock-out' ? room.countdownMode : false,
-          countdownEndTime: room.mode === 'lock-out' ? room.countdownEndTime : null,
+          lockedTiles: isLockOutMode(room.mode) ? Object.fromEntries(room.lockedTiles) : null,
+          lockCounts: isLockOutMode(room.mode) ? getLockCounts(room) : null,
+          countdownMode: isLockOutMode(room.mode) ? room.countdownMode : false,
+          countdownEndTime: isLockOutMode(room.mode) ? room.countdownEndTime : null,
           leaderboard: room.leaderboard || []
         });
         
@@ -461,7 +521,7 @@ io.on('connection', (socket) => {
     }
     
     // Lock-out mode: only allow 2 players
-    if (room.mode === 'lock-out' && room.players.size >= 2) {
+    if (isLockOutMode(room.mode) && room.players.size >= 2) {
       socket.emit('joinError', { message: 'Lock-out mode is limited to 2 players' });
       return;
     }
@@ -515,13 +575,13 @@ io.on('connection', (socket) => {
     }
     
     // Lock-out mode: must have exactly 2 players
-    if (room.mode === 'lock-out' && room.players.size !== 2) {
+    if (isLockOutMode(room.mode) && room.players.size !== 2) {
       socket.emit('startGameError', { message: 'Lock-out mode requires exactly 2 players' });
       return;
     }
     
-    // Generate board and start time
-    room.board = generateBoard(room.mode);
+    // Generate board and start time (pass the full mode, generateBoard will extract base mode)
+    room.board = generateBoard(room.mode, room.minGrade || 'green');
     room.startTime = Date.now();
     room.status = 'in-game';
     
@@ -534,7 +594,7 @@ io.on('connection', (socket) => {
     room.leaderboard = [];
     
     // Initialize lock-out mode data
-    if (room.mode === 'lock-out') {
+    if (isLockOutMode(room.mode)) {
       room.lockedTiles = new Map();
       room.lockHistory = [];
       room.countdownMode = false;
@@ -571,7 +631,7 @@ io.on('connection', (socket) => {
     if (room.status !== 'in-game') return;
     
     // Skip updateMarked for lock-out mode (use lockTile instead)
-    if (room.mode === 'lock-out') return;
+    if (isLockOutMode(room.mode)) return;
     
     const player = room.players.get(socket.id);
     player.marked = marked;

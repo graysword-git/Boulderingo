@@ -6,6 +6,9 @@ const exchangeBtn = document.getElementById('exchangeBtn');
 const timerEl = document.getElementById('timer');
 const verifyBtn = document.getElementById('verifyBtn');
 const modeSelect = document.getElementById('modeSelect');
+const minGradeSelect = document.getElementById('minGradeSelect');
+const lockoutRadio = document.getElementById('lockoutRadio');
+const normalRadio = document.getElementById('normalRadio');
 const containerEl = document.getElementById('container');
 
 // Multiplayer elements
@@ -38,15 +41,15 @@ let countdownEndTime = null;
 let countdownInterval = null;
 
 const CHALLENGES = [
-	"Pink -7 holds",
-	"Yellow -5 holds",
-	"Green -3 holds",
+	"Pink tag -7 holds",
+	"Yellow tag -5 holds",
+	"Green tag -3 holds",
 	"Bathang any hold",
 	"Slab 🥰",
 	"Dyno 🤮",
 	"Scorpion every move",
 	"Graysword Kilter 30°",
-	"Sloper deadhang 5s",
+	// "Sloper deadhang 5s" - Removed, generated dynamically based on mode
 	"Climb, downclimb, climb",
 	"Stacked feet",
 	"Facing out start",
@@ -60,14 +63,14 @@ const CHALLENGES = [
 	"Flash x3",
 	"Eyes closed",
 	"Half & Half",
-	"ALL Pinks b2b",
+	// "ALL Pinks b2b" - Removed, generated dynamically based on mode
 	"1 Hand only",
 	"No hands on a volume"
 ]
 
 const HARD_CHALLENGES = [
 	"E-limb-ination",
-	"Orange -1 hold",
+	"Orange tag -1 hold",
 	"Graysword Kilter 40°",
 	"Campus",
 	"Feet b4 hands"
@@ -77,6 +80,110 @@ let timerInterval = null;
 let timerStartMs = null;
 let exchangeMode = false;
 let exchangeUsed = false;
+let currentMinGrade = 'green'; // Track current min grade
+
+// Challenge explanations dictionary
+const CHALLENGE_EXPLANATIONS = {
+	"Pink tag -7 holds": "Climb a pink tag route subtracting 7 holds",
+	"Yellow tag -5 holds": "Climb a yellow tag route subtracting 5 holds",
+	"Green tag -3 holds": "Climb a green tag route subtracting 3 holds",
+	"Orange tag -1 hold": "Climb an orange tag route subtracting 1 hold",
+	"Bathang any hold": "Hang from any hold with your body inverted (bathang position)",
+	"Slab 🥰": "Climb a slab route (less than vertical, technical balance climbing)",
+	"Dyno 🤮": "Perform a dynamic move (jump to a hold)",
+	"Scorpion every move": "Use a scorpion position (one leg behind you) on every move",
+	"Graysword Kilter 30°": "Hop on over to the Kilter board and search my username 'graysword', any climb counts (30° angle)",
+	"Graysword Kilter 40°": "Hop on over to the Kilter board and search my username 'graysword', any climb counts (40° angle)",
+	"Sloper deadhang 5s": "Deadhang from a sloper hold for 5 seconds",
+	"Sloper deadhang 10s": "Deadhang from a sloper hold for 10 seconds",
+	"Climb, downclimb, climb": "Climb up, then downclimb, then climb up again",
+	"Stacked feet": "Use stacked feet (one foot on top of the other) during the climb",
+	"Facing out start": "Start the climb facing away from the wall",
+	"Campus anything": "Climb without using your feet (hands only)",
+	"Campus": "Climb without using your feet (hands only)",
+	"4 repeats 4 min": "Complete 4 ascents of the same route within 4 minutes",
+	"Dropknee": "Use a dropknee technique during the climb",
+	"Heel Hook": "Use a heel hook during the climb",
+	"Toe Hook": "Use a toe hook during the climb",
+	"Kneebar": "Use a kneebar during the climb",
+	"Figure 4": "Use a figure-4 technique during the climb",
+	"Flash x3": "Flash (complete on first try) 3 different routes - can be a day flash if you have climbed recently and are low on options",
+	"Eyes closed": "Climb with your eyes closed (honour system, open if you feel unstable)",
+	"Half & Half": "Left limbs on one route, right limbs on another route",
+	"5 Pinks b2b": "Climb 5 pink-tagged routes back-to-back without rest",
+	"10 Pinks b2b": "Climb 10 pink-tagged routes back-to-back without rest",
+	"1 Hand only": "Climb using only one hand (other hand cannot touch holds)",
+	"No hands on a volume": "Standing on one(1) volume, with no hands helping you",
+	"E-limb-ination": "Repeat the route x3 with -1 limb each time",
+	"Feet b4 hands": "Place your feet on each hold before your hands",
+	"FREE": "Free space - automatically marked"
+};
+
+// Helper function to get explanation for a challenge
+function getChallengeExplanation(challengeText) {
+	if (!challengeText) return null;
+	
+	// Try exact match first
+	if (CHALLENGE_EXPLANATIONS[challengeText]) {
+		return CHALLENGE_EXPLANATIONS[challengeText];
+	}
+	
+	// Try partial matches for variations (e.g., "Pink tag" matches "Pink tag -7 holds")
+	for (const [key, value] of Object.entries(CHALLENGE_EXPLANATIONS)) {
+		if (challengeText.includes(key) || key.includes(challengeText)) {
+			return value;
+		}
+	}
+	
+	return null; // Return null if no explanation found (don't show tooltip)
+}
+
+// Grade order mapping
+const GRADE_ORDER = {
+  pink: { name: 'Pink', order: 1 },
+  yellow: { name: 'Yellow', order: 2 },
+  green: { name: 'Green', order: 3 },
+  orange: { name: 'Orange', order: 4 },
+  blue: { name: 'Blue', order: 5 }
+};
+
+// Get current game mode (handles lock-out radio button)
+// Lock-out can now work with easy or hard mode
+function getCurrentMode() {
+  // Always return the actual mode (easy/hard), even if lock-out is selected
+  return modeSelect ? modeSelect.value : 'easy'; // 'easy' or 'hard'
+}
+
+// Check if lock-out mode is selected
+function isLockOutMode() {
+  return lockoutRadio && lockoutRadio.checked;
+}
+
+// Get current min grade
+function getCurrentMinGrade() {
+  return minGradeSelect ? minGradeSelect.value : 'green';
+}
+
+// Update UI when lock-out mode changes
+// Note: Lock-out mode no longer disables other options - you can use any mode/grade with lock-out
+function updateModeUI() {
+  // No longer disabling controls - lock-out works with any settings
+  // This function is kept for potential future UI updates but doesn't disable anything
+}
+
+// Initialize mode UI handlers
+if (lockoutRadio && normalRadio) {
+  lockoutRadio.addEventListener('change', updateModeUI);
+  normalRadio.addEventListener('change', updateModeUI);
+  // Set initial state
+  updateModeUI();
+}
+
+// Hide lockout toggle on initial load (single player is default)
+const lockoutToggle = document.getElementById('lockoutToggle');
+if (lockoutToggle) {
+  lockoutToggle.style.display = 'none';
+}
 
 // Initialize Socket.io connection
 function initSocket() {
@@ -113,23 +220,47 @@ function initSocket() {
 	});
 	
 	// Helper: Setup lobby UI (used by both roomCreated and roomJoined)
-	function setupLobbyUI(roomCode, mode, isHost, players) {
+	function setupLobbyUI(roomCode, mode, isHost, players, minGrade = null) {
 		currentRoomCode = roomCode;
 		isHost = isHost;
 		lobbyPlayers = players;
 		roomCodeDisplay.textContent = roomCode;
 		roomInfo.style.display = 'block';
-		modeSelect.value = mode;
+		
+		// Update UI to match room settings
+		// Check if mode is lock-out (could be 'lock-out', 'lock-out-easy', or 'lock-out-hard')
+		const isLockout = mode === 'lock-out' || (typeof mode === 'string' && mode.startsWith('lock-out-'));
+		if (isLockout) {
+			if (lockoutRadio) lockoutRadio.checked = true;
+			if (normalRadio) normalRadio.checked = false;
+			// Extract base mode from lock-out mode
+			if (mode === 'lock-out-easy' || mode === 'lock-out') {
+				if (modeSelect) modeSelect.value = 'easy';
+			} else if (mode === 'lock-out-hard') {
+				if (modeSelect) modeSelect.value = 'hard';
+			}
+		} else {
+			if (normalRadio) normalRadio.checked = true;
+			if (lockoutRadio) lockoutRadio.checked = false;
+			if (modeSelect) modeSelect.value = mode;
+		}
+		
+		if (minGrade && minGradeSelect) {
+			minGradeSelect.value = minGrade;
+			currentMinGrade = minGrade;
+		}
+		
+		updateModeUI(); // Disable/enable controls based on mode
 		showLobby(players, isHost);
 	}
 	
 	// Both roomCreated and roomJoined do the same thing - merge handlers
-	socket.on('roomCreated', ({ roomCode, mode, isHost, players }) => {
-		setupLobbyUI(roomCode, mode, isHost, players);
+	socket.on('roomCreated', ({ roomCode, mode, isHost, players, minGrade }) => {
+		setupLobbyUI(roomCode, mode, isHost, players, minGrade);
 	});
 	
-	socket.on('roomJoined', ({ roomCode, mode, isHost, players }) => {
-		setupLobbyUI(roomCode, mode, isHost, players);
+	socket.on('roomJoined', ({ roomCode, mode, isHost, players, minGrade }) => {
+		setupLobbyUI(roomCode, mode, isHost, players, minGrade);
 	});
 	
 	socket.on('joinError', ({ message }) => {
@@ -156,22 +287,54 @@ function initSocket() {
 	});
 	
 	// Helper: Setup game UI based on mode
-	function setupGameUI(mode, board, startTime, marked = null, lockedTilesData = null, lockCountsData = null, countdownMode = false, countdownEndTimeParam = null, leaderboardData = null) {
+	function setupGameUI(mode, board, startTime, marked = null, lockedTilesData = null, lockCountsData = null, countdownMode = false, countdownEndTimeParam = null, leaderboardData = null, minGrade = null) {
 		roomStartTime = startTime;
 		currentMode = mode;
+		
+		// Update min grade
+		if (minGrade) {
+			currentMinGrade = minGrade;
+		}
+		
+		// Update welcome message with min grade requirement
+		const gradeName = GRADE_ORDER[currentMinGrade]?.name || 'Green';
+		if (welcome && nameInput.value.trim()) {
+			welcome.textContent = `Welcome, ${nameInput.value.trim()}! (Min: ${gradeName} or above)`;
+		}
 		
 		// Hide lobby first
 		hideLobby();
 		
 		// Set mode and render board
-		modeSelect.value = mode;
+		// Check if mode is lock-out (could be 'lock-out', 'lock-out-easy', or 'lock-out-hard')
+		const isLockoutMode = mode === 'lock-out' || (typeof mode === 'string' && mode.startsWith('lock-out-'));
+		if (isLockoutMode) {
+			if (lockoutRadio) lockoutRadio.checked = true;
+			if (normalRadio) normalRadio.checked = false;
+			// Extract base mode from lock-out mode
+			if (mode === 'lock-out-easy' || mode === 'lock-out') {
+				if (modeSelect) modeSelect.value = 'easy';
+			} else if (mode === 'lock-out-hard') {
+				if (modeSelect) modeSelect.value = 'hard';
+			}
+		} else {
+			if (normalRadio) normalRadio.checked = true;
+			if (lockoutRadio) lockoutRadio.checked = false;
+			if (modeSelect) modeSelect.value = mode;
+		}
+		
+		if (minGrade && minGradeSelect) {
+			minGradeSelect.value = minGrade;
+		}
+		
+		updateModeUI(); // Disable/enable controls
 		
 		// Show common game elements
 		bingoBoard.style.display = 'grid';
 		timerEl.style.display = 'block';
 		
-		// Initialize lock-out mode
-		if (mode === 'lock-out') {
+		// Initialize lock-out mode (check if mode is lock-out variant)
+		if (isLockoutMode) {
 			if (lockedTilesData) {
 				lockedTiles = new Map(Object.entries(lockedTilesData).map(([key, value]) => [parseInt(key), value]));
 			} else {
@@ -247,12 +410,12 @@ function initSocket() {
 		if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
 	}
 	
-	socket.on('gameStarted', ({ roomCode, board, mode, startTime }) => {
-		setupGameUI(mode, board, startTime);
+	socket.on('gameStarted', ({ roomCode, board, mode, startTime, minGrade }) => {
+		setupGameUI(mode, board, startTime, null, null, null, false, null, null, minGrade);
 	});
 	
-	socket.on('gameRejoined', ({ roomCode, board, mode, startTime, marked, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts, countdownMode, countdownEndTime, leaderboard: roomLeaderboard }) => {
-		setupGameUI(mode, board, startTime, marked, serverLockedTiles, serverLockCounts, countdownMode, countdownEndTime, roomLeaderboard);
+	socket.on('gameRejoined', ({ roomCode, board, mode, startTime, marked, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts, countdownMode, countdownEndTime, leaderboard: roomLeaderboard, minGrade }) => {
+		setupGameUI(mode, board, startTime, marked, serverLockedTiles, serverLockCounts, countdownMode, countdownEndTime, roomLeaderboard, minGrade);
 	});
 	
 	socket.on('startGameError', ({ message }) => {
@@ -490,30 +653,203 @@ function startTimer() {
 	localStorage.removeItem('timerElapsedMs');
 }
 
-function getChallengePool() {
-	const mode = (modeSelect && modeSelect.value) || 'easy';
-	return mode === 'hard' ? [...CHALLENGES, ...HARD_CHALLENGES] : CHALLENGES;
+function getChallengePool(mode = null, minGrade = null) {
+	const currentMode = mode || (modeSelect && modeSelect.value) || 'easy';
+	const currentMinGrade = minGrade || getCurrentMinGrade();
+	
+	let pool = currentMode === 'hard' ? [...CHALLENGES, ...HARD_CHALLENGES] : [...CHALLENGES];
+	
+	// Add dynamic "Pinks b2b" challenge based on mode
+	// Only add if minGrade is not pink (can't do pinks if pink is minimum)
+	if (currentMinGrade !== 'pink') {
+		const pinksChallenge = currentMode === 'hard' ? "10 Pinks b2b" : "5 Pinks b2b";
+		pool.push(pinksChallenge);
+	}
+	
+	// Add dynamic "Sloper deadhang" challenge based on mode
+	const sloperChallenge = currentMode === 'hard' ? "Sloper deadhang 10s" : "Sloper deadhang 5s";
+	pool.push(sloperChallenge);
+	
+	return pool;
 }
 
 function generateBoard() {
 	// get items
-	const poolSource = getChallengePool();
-	const validItems = poolSource.filter(item => item.trim() !== "");
-	// ensure min items
-	const pool =
-		validItems.length >= 25
-		? validItems
-		: [...validItems, ...Array(25 - validItems.length).fill("—")];
+	const mode = (modeSelect && modeSelect.value) || 'easy';
+	const minGrade = getCurrentMinGrade();
+	const poolSource = getChallengePool(mode, minGrade);
+	const validItems = poolSource.filter(item => item.trim() !== "" && item !== "—");
+	// ensure min items - if we don't have enough, just use what we have (shouldn't happen with dynamic challenges)
+	const pool = validItems.length >= 25 ? validItems : validItems;
 	// shuffle list
 	const shuffled = [...pool].sort(() => 0.5 - Math.random());
-	// select for board
-	const board = shuffled.slice(0, 25);
+	// select for board (take up to 25, or all if less)
+	const board = shuffled.slice(0, Math.min(25, shuffled.length));
 	// force free space for easy mode (center index 12)
-	const mode = (modeSelect && modeSelect.value) || 'easy';
 	if (mode === 'easy') {
 		board[12] = 'FREE';
 	}
 	return board;
+}
+
+// Tooltip management
+let tooltipTimer = null;
+let currentTooltipCell = null;
+let pressTimer = null;
+const LONG_PRESS_DURATION = 500; // 500ms for long press
+
+// Setup tooltip for a cell
+function setupChallengeTooltip(cell, challengeText) {
+	const tooltip = document.getElementById('challengeTooltip');
+	const tooltipTitle = document.getElementById('tooltipTitle');
+	const tooltipText = document.getElementById('tooltipText');
+	
+	if (!tooltip || !tooltipTitle || !tooltipText) return;
+	
+	// Store tooltip state on the cell element itself
+	let cellPressTimer = null;
+	let cellPressStartTime = 0;
+	let cellTooltipShown = false;
+	
+	function showTooltip(e) {
+		const explanation = getChallengeExplanation(challengeText);
+		if (!explanation) {
+			return; // Don't show tooltip if no explanation
+		}
+		
+		tooltipTitle.textContent = challengeText;
+		tooltipText.textContent = explanation;
+		tooltip.style.display = 'block';
+		
+		// Position tooltip near the cell
+		const rect = cell.getBoundingClientRect();
+		const tooltipRect = tooltip.getBoundingClientRect();
+		const scrollY = window.scrollY || window.pageYOffset;
+		const scrollX = window.scrollX || window.pageXOffset;
+		
+		// Try to position above, fallback to below
+		let top = rect.top + scrollY - tooltipRect.height - 10;
+		let left = rect.left + scrollX + (rect.width / 2) - (tooltipRect.width / 2);
+		
+		// Adjust if tooltip goes off screen
+		if (top < scrollY + 10) {
+			top = rect.bottom + scrollY + 10; // Show below instead
+		}
+		if (left < scrollX + 10) {
+			left = scrollX + 10;
+		}
+		if (left + tooltipRect.width > scrollX + window.innerWidth - 10) {
+			left = scrollX + window.innerWidth - tooltipRect.width - 10;
+		}
+		
+		tooltip.style.top = `${top}px`;
+		tooltip.style.left = `${left}px`;
+		
+		currentTooltipCell = cell;
+		cellTooltipShown = true;
+		// Mark cell to prevent click action
+		cell.dataset.tooltipActive = 'true';
+	}
+	
+	function hideTooltip() {
+		if (tooltip) {
+			tooltip.style.display = 'none';
+		}
+		if (currentTooltipCell === cell) {
+			currentTooltipCell = null;
+		}
+		cellTooltipShown = false;
+		cell.dataset.tooltipActive = 'false';
+	}
+	
+	function cancelPressTimer() {
+		if (cellPressTimer) {
+			clearTimeout(cellPressTimer);
+			cellPressTimer = null;
+		}
+	}
+	
+	// Pointer events (works for both touch and mouse, better cross-browser support)
+	cell.addEventListener('pointerdown', (e) => {
+		// Only handle left mouse button or touch for long press
+		if (e.button === 0 || e.pointerType === 'touch') {
+			cellPressStartTime = Date.now();
+			cellTooltipShown = false;
+			cell.dataset.tooltipActive = 'false';
+			cancelPressTimer();
+			cellPressTimer = setTimeout(() => {
+				showTooltip(e);
+				cellPressTimer = null;
+			}, LONG_PRESS_DURATION);
+		}
+	}, { passive: true });
+	
+	cell.addEventListener('pointerup', (e) => {
+		const pressDuration = Date.now() - cellPressStartTime;
+		cancelPressTimer();
+		
+		// If tooltip was shown or press was long enough, prevent click
+		if (cellTooltipShown || pressDuration >= LONG_PRESS_DURATION) {
+			// Small delay to ensure click event is prevented
+			setTimeout(() => {
+				cell.dataset.tooltipActive = 'false';
+			}, 100);
+		}
+	}, { passive: true });
+	
+	cell.addEventListener('pointercancel', () => {
+		cancelPressTimer();
+		hideTooltip();
+	});
+	
+	cell.addEventListener('pointerleave', () => {
+		cancelPressTimer();
+		// Only hide if it was a quick interaction (not a long press)
+		if (Date.now() - cellPressStartTime < LONG_PRESS_DURATION) {
+			hideTooltip();
+		}
+	});
+	
+	// Mouse events (desktop - right click)
+	cell.addEventListener('contextmenu', (e) => {
+		e.preventDefault();
+		showTooltip(e);
+	});
+	
+	// Touch events (mobile) - additional support for older browsers
+	cell.addEventListener('touchstart', (e) => {
+		cellPressStartTime = Date.now();
+		cellTooltipShown = false;
+		cell.dataset.tooltipActive = 'false';
+		cancelPressTimer();
+		cellPressTimer = setTimeout(() => {
+			showTooltip(e);
+			cellPressTimer = null;
+		}, LONG_PRESS_DURATION);
+	}, { passive: true });
+	
+	cell.addEventListener('touchend', (e) => {
+		const pressDuration = Date.now() - cellPressStartTime;
+		cancelPressTimer();
+		// If tooltip was shown, prevent the click
+		if (cellTooltipShown || pressDuration >= LONG_PRESS_DURATION) {
+			e.preventDefault();
+			setTimeout(() => {
+				cell.dataset.tooltipActive = 'false';
+			}, 100);
+		}
+	}, { passive: false });
+	
+	cell.addEventListener('touchcancel', () => {
+		cancelPressTimer();
+		hideTooltip();
+	});
+	
+	cell.addEventListener('touchmove', () => {
+		// Cancel long press if user moves finger
+		cancelPressTimer();
+		hideTooltip();
+	}, { passive: true });
 }
 
 function renderBoard(board, marked = []) {
@@ -525,12 +861,17 @@ function renderBoard(board, marked = []) {
 		cell.className = 'cell';
 		cell.textContent = text || "";
 		cell.dataset.tileIndex = index;
+		cell.dataset.challengeText = text; // Store challenge text for tooltip
 		
 		// free space handling: start marked but no special class
 		if (text === 'FREE') cell.classList.add('marked');
 		
-		// Lock-out mode: handle locked tiles
-		if (currentMode === 'lock-out') {
+		// Add long press / right-click tooltip support
+		setupChallengeTooltip(cell, text);
+		
+		// Lock-out mode: handle locked tiles (check if mode is lock-out variant)
+		const isLockoutMode = currentMode === 'lock-out' || (typeof currentMode === 'string' && currentMode.startsWith('lock-out-'));
+		if (isLockoutMode) {
 			const lock = lockedTiles.get(index);
 			if (lock) {
 				if (lock.playerId === socket.id) {
@@ -540,7 +881,22 @@ function renderBoard(board, marked = []) {
 				}
 			}
 			
+			// Use click event instead of pointerdown to allow long press to work
+			// Also track press time to detect long press
+			let pressStartTime = 0;
 			cell.addEventListener('pointerdown', () => {
+				pressStartTime = Date.now();
+			});
+			
+			cell.addEventListener('click', (e) => {
+				// Don't mark if tooltip was shown (long press) or if press was too long
+				const pressDuration = Date.now() - pressStartTime;
+				if (cell.dataset.tooltipActive === 'true' || pressDuration >= LONG_PRESS_DURATION) {
+					e.preventDefault();
+					e.stopPropagation();
+					cell.dataset.tooltipActive = 'false'; // Reset
+					return;
+				}
 				if (exchangeMode) return;
 				if (cell.textContent === 'FREE') return;
 				if (lockedTiles.has(index)) return; // Already locked
@@ -552,7 +908,22 @@ function renderBoard(board, marked = []) {
 		} else {
 			// Regular mode
 			if (marked.includes(index)) cell.classList.add('marked');
+			// Use click event instead of pointerdown to allow long press to work
+			// Also track press time to detect long press
+			let pressStartTime = 0;
 			cell.addEventListener('pointerdown', () => {
+				pressStartTime = Date.now();
+			});
+			
+			cell.addEventListener('click', (e) => {
+				// Don't mark if tooltip was shown (long press) or if press was too long
+				const pressDuration = Date.now() - pressStartTime;
+				if (cell.dataset.tooltipActive === 'true' || pressDuration >= LONG_PRESS_DURATION) {
+					e.preventDefault();
+					e.stopPropagation();
+					cell.dataset.tooltipActive = 'false'; // Reset
+					return;
+				}
 				if (exchangeMode) return;
 				if (cell.textContent === 'FREE') return;
 				cell.classList.toggle('marked');
@@ -643,11 +1014,12 @@ function exchangeTile() {
 
 		// find unused items
 		const usedItems = new Set(board);
-		const poolSource = getChallengePool();
+		const mode = (modeSelect && modeSelect.value) || 'easy';
+		const minGrade = getCurrentMinGrade();
+		const poolSource = getChallengePool(mode, minGrade);
 		const unusedItems = poolSource.filter(item => !usedItems.has(item));
 
 		// prevent exchanging the FREE center in easy mode
-		const mode = (modeSelect && modeSelect.value) || 'easy';
 		if (mode === 'easy' && index === 12 && cell.textContent === 'FREE') {
 			alert('Center FREE space cannot be exchanged in Easy mode.');
 			exitExchangeMode();
@@ -827,14 +1199,123 @@ if (singlePlayerBtn && multiplayerBtn) {
 		multiplayerBtn.classList.remove('active');
 		singlePlayerControls.style.display = 'block';
 		multiplayerControls.style.display = 'none';
+		
+		// Hide lockout toggle (only shown in multiplayer)
+		// Use visibility to preserve layout space and prevent button shifting
+		const lockoutToggle = document.getElementById('lockoutToggle');
+		if (lockoutToggle) {
+			lockoutToggle.style.display = 'none';
+			lockoutToggle.style.visibility = 'hidden';
+			lockoutToggle.style.height = '0';
+			lockoutToggle.style.margin = '0';
+			lockoutToggle.style.padding = '0';
+		}
 		roomInfo.style.display = 'none';
 		leaderboard.style.display = 'none';
 		hideLobby();
 		currentRoomCode = null;
 		isHost = false;
+		
+		// Disconnect socket
 		if (socket) {
 			socket.disconnect();
 			socket = null;
+		}
+		
+		// Hide multiplayer-specific UI
+		document.getElementById('lockOutStats').style.display = 'none';
+		document.getElementById('countdownMode').style.display = 'none';
+		document.getElementById('lockConfirm').style.display = 'none';
+		document.getElementById('recapLog').style.display = 'none';
+		
+		// Reset game mode to single player (not lock-out)
+		currentMode = null;
+		lockedTiles = new Map();
+		lockCounts = { myLocks: 0, opponentLocks: 0 };
+		confirmingTileIndex = null;
+		
+		// Show single player UI elements
+		if (verifyBtn) {
+			verifyBtn.style.display = 'block';
+			verifyBtn.style.removeProperty('text-align');
+			verifyBtn.style.removeProperty('margin');
+		}
+		if (exchangeBtn) {
+			exchangeBtn.style.display = 'block';
+			exchangeBtn.style.removeProperty('text-align');
+			exchangeBtn.style.removeProperty('margin');
+		}
+		
+		// Restore single player board if it exists in localStorage
+		const savedBoard = localStorage.getItem('bingoBoard');
+		if (savedBoard) {
+			try {
+				const board = JSON.parse(savedBoard);
+				const marked = JSON.parse(localStorage.getItem('bingoMarked') || '[]');
+				if (board && Array.isArray(board) && board.length === 25) {
+					// Restore the board - ensure display is set BEFORE rendering
+					if (bingoBoard) {
+						bingoBoard.style.display = 'grid';
+						renderBoard(board, marked);
+						
+						// Restore timer state (same logic as loadData)
+						const timerRunning = localStorage.getItem('timerRunning') === 'true';
+						const storedStart = localStorage.getItem('timerStartMs');
+						const storedElapsed = localStorage.getItem('timerElapsedMs');
+						if (timerRunning && storedStart) {
+							// Resume running timer
+							timerStartMs = parseInt(storedStart, 10);
+							updateTimer();
+							if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
+							if (timerEl) timerEl.style.display = 'block';
+						} else if (!timerRunning && storedElapsed) {
+							// Show final elapsed without running
+							const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
+							const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+							const seconds = String(totalSeconds % 60).padStart(2, '0');
+							if (timerEl) {
+								timerEl.textContent = `${minutes}:${seconds}`;
+								timerEl.style.display = 'block';
+							}
+						} else {
+							// No timer state, start fresh
+							if (timerEl) timerEl.style.display = 'block';
+						}
+						
+						// Restore exchange button state
+						exchangeUsed = localStorage.getItem('exchangeUsed') === 'true';
+						updateExchangeButtonState();
+						
+						// Show welcome message
+						const name = localStorage.getItem('bingoName') || '';
+						if (welcome && name) {
+							welcome.textContent = `Welcome, ${name}!`;
+						}
+					}
+				} else {
+					// Board exists but is invalid, clear it
+					console.warn('Invalid board in localStorage, clearing. Board length:', board ? board.length : 'null');
+					localStorage.removeItem('bingoBoard');
+					if (bingoBoard) {
+						bingoBoard.style.display = 'none';
+						bingoBoard.innerHTML = '';
+					}
+				}
+			} catch (e) {
+				console.error('Error restoring board:', e);
+				// If restoration fails, clear localStorage and show empty state
+				localStorage.removeItem('bingoBoard');
+				if (bingoBoard) {
+					bingoBoard.style.display = 'none';
+					bingoBoard.innerHTML = '';
+				}
+			}
+		} else {
+			// No saved board, hide the board
+			if (bingoBoard) {
+				bingoBoard.style.display = 'none';
+				bingoBoard.innerHTML = '';
+			}
 		}
 	});
 	
@@ -844,7 +1325,45 @@ if (singlePlayerBtn && multiplayerBtn) {
 		singlePlayerBtn.classList.remove('active');
 		singlePlayerControls.style.display = 'none';
 		multiplayerControls.style.display = 'block';
-		initSocket();
+		
+		// Show lockout toggle (only shown in multiplayer)
+		const lockoutToggle = document.getElementById('lockoutToggle');
+		if (lockoutToggle) {
+			lockoutToggle.style.display = 'flex';
+			lockoutToggle.style.visibility = 'visible';
+			lockoutToggle.style.removeProperty('height');
+			lockoutToggle.style.removeProperty('margin');
+			lockoutToggle.style.removeProperty('padding');
+		}
+		
+		// Reset single player game state
+		bingoBoard.style.display = 'none';
+		bingoBoard.innerHTML = '';
+		verifyBtn.style.display = 'none';
+		exchangeBtn.style.display = 'none';
+		leaderboard.style.display = 'none';
+		timerEl.style.display = 'none';
+		stopTimer();
+		exchangeMode = false;
+		exchangeUsed = false;
+		currentMode = null;
+		lockedTiles = new Map();
+		lockCounts = { myLocks: 0, opponentLocks: 0 };
+		confirmingTileIndex = null;
+		document.getElementById('lockOutStats').style.display = 'none';
+		document.getElementById('countdownMode').style.display = 'none';
+		document.getElementById('lockConfirm').style.display = 'none';
+		document.getElementById('recapLog').style.display = 'none';
+		
+		// Hide lobby initially (will show when room is created/joined)
+		hideLobby();
+		currentRoomCode = null;
+		isHost = false;
+		
+		// Initialize socket if not already initialized
+		if (!socket) {
+			initSocket();
+		}
 	});
 }
 
@@ -857,9 +1376,29 @@ if (createRoomBtn) {
 			return;
 		}
 		
-		const mode = modeSelect.value;
-		socket = initSocket();
-		socket.emit('createRoom', { name, mode });
+		let mode = getCurrentMode(); // Get easy/hard mode
+		const minGrade = getCurrentMinGrade();
+		
+		// If lock-out is selected, combine it with the mode
+		// Format: 'lock-out-easy' or 'lock-out-hard'
+		if (isLockOutMode()) {
+			mode = `lock-out-${mode}`;
+		}
+		
+		// Initialize socket if not already initialized
+		if (!socket) {
+			socket = initSocket();
+		}
+		
+		// Wait for socket to be connected before creating room
+		if (socket.connected) {
+			socket.emit('createRoom', { name, mode, minGrade });
+		} else {
+			// Wait for connection
+			socket.once('connect', () => {
+				socket.emit('createRoom', { name, mode, minGrade });
+			});
+		}
 	});
 }
 
@@ -1015,4 +1554,48 @@ if (cancelLockBtn) {
 	cancelLockBtn.addEventListener('click', cancelTileConfirmation);
 }
 
-window.addEventListener('load', loadData);
+// Hide tooltip when clicking elsewhere
+document.addEventListener('click', (e) => {
+	if (currentTooltipCell && !currentTooltipCell.contains(e.target)) {
+		const tooltip = document.getElementById('challengeTooltip');
+		if (tooltip && !tooltip.contains(e.target)) {
+			tooltip.style.display = 'none';
+		}
+		currentTooltipCell = null;
+	}
+});
+
+// Hide tooltip on scroll
+document.addEventListener('scroll', () => {
+	const tooltip = document.getElementById('challengeTooltip');
+	if (tooltip) {
+		tooltip.style.display = 'none';
+	}
+	currentTooltipCell = null;
+}, true);
+
+// Initialize UI state on page load
+function initializeUIState() {
+	// Ensure single player controls are visible by default (single player is default)
+	if (singlePlayerControls) {
+		singlePlayerControls.style.display = 'block';
+	}
+	if (multiplayerControls) {
+		multiplayerControls.style.display = 'none';
+	}
+	
+	// Ensure buttons have proper initial state (remove any inline styles that might cause shifts)
+	if (verifyBtn) {
+		verifyBtn.style.removeProperty('text-align');
+		verifyBtn.style.removeProperty('margin');
+	}
+	if (exchangeBtn) {
+		exchangeBtn.style.removeProperty('text-align');
+		exchangeBtn.style.removeProperty('margin');
+	}
+}
+
+window.addEventListener('load', () => {
+	initializeUIState();
+	loadData();
+});

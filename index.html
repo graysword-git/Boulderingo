@@ -10,26 +10,59 @@
 <body data-backend-url="https://boulderingo.onrender.com">
   <div class="container" id="container">
   
-    <h1>Boulderingo</h1>
-	<p>All challenges must be done on a Green tag or above unless specified</p>
-	<p>Only 1 challenge may be attempted at a time</p>
+    <!-- Header with logo space and title -->
+    <div class="header">
+      <div class="logo-placeholder">
+        <!-- Logo will go here - add <img src="logo.png" alt="Logo" /> when ready -->
+      </div>
+      <h1>Boulderingo</h1>
+    </div>
+    
+    <!-- Challenge instruction -->
+    <p class="challenge-instruction">Only 1 challenge may be attempted at a time</p>
 	
     <div class="input-section">
       <label for="nameInput">Enter your name:</label>
       <input type="text" id="nameInput" placeholder="Your name..." />
-      <div class="mode-row">
-        <label for="modeSelect">Mode:</label>
-        <select id="modeSelect">
-          <option value="easy" selected>Easy</option>
-          <option value="hard">Hard</option>
-          <option value="lock-out">Lock-Out</option>
-        </select>
+      
+      <!-- Game settings row -->
+      <div class="settings-row">
+        <div class="setting-group">
+          <label for="modeSelect">Difficulty:</label>
+          <select id="modeSelect">
+            <option value="easy" selected>Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        
+        <div class="setting-group">
+          <label for="minGradeSelect">Min Grade:</label>
+          <select id="minGradeSelect">
+            <option value="pink">Pink</option>
+            <option value="yellow">Yellow</option>
+            <option value="green" selected>Green</option>
+            <option value="orange">Orange</option>
+            <option value="blue">Blue</option>
+          </select>
+        </div>
       </div>
       
       <div class="multiplayer-section">
         <div class="game-mode-toggle">
           <button id="singlePlayerBtn" class="mode-toggle active">Single Player</button>
           <button id="multiplayerBtn" class="mode-toggle">Multiplayer</button>
+        </div>
+        
+        <!-- Lock-out mode toggle (only shown in multiplayer) -->
+        <div class="lockout-toggle" id="lockoutToggle" style="display: none;">
+          <label>
+            <input type="radio" name="gameType" id="normalRadio" value="normal" checked />
+            Normal Mode
+          </label>
+          <label>
+            <input type="radio" name="gameType" id="lockoutRadio" value="lock-out" />
+            Lock-Out Mode
+          </label>
         </div>
         
         <div id="singlePlayerControls">
@@ -90,11 +123,12 @@
       <ol id="leaderboardList"></ol>
     </div>
 
-	<div class="dropdown">
-		<p>Half & Half - left limb one route, right limb another route</p>
-		<p>E-limb-ination - repeat x3 with -1 limb each time</p>
-		<p>Eyes closed - honour system, open if you feel usntable</p>
-		<p>Flash - can be a day flash if you have climbed recently and are low on options</p>
+	<!-- Challenge tooltip -->
+	<div id="challengeTooltip" class="challenge-tooltip" style="display: none;">
+		<div class="tooltip-content">
+			<h4 id="tooltipTitle"></h4>
+			<p id="tooltipText"></p>
+		</div>
 	</div>
 
 	<button id="exchangeBtn" onclick="exchangeTile()">Exchange</button>
