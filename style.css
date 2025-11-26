@@ -1,3 +1,7 @@
+/* ============================================
+   BASE STYLES
+   ============================================ */
+
 body {
   font-family: system-ui, sans-serif;
   background: #240046;
@@ -19,7 +23,9 @@ body {
   max-width: 500px;
 }
 
-/* Header with logo */
+/* ============================================
+   HEADER & LOGO
+   ============================================ */
 .header {
   display: flex;
   align-items: center;
@@ -59,7 +65,10 @@ body {
   font-weight: 500;
 }
 
-/* Settings row */
+/* ============================================
+   SETTINGS & CONTROLS
+   ============================================ */
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -81,7 +90,6 @@ body {
   color: #333;
 }
 
-/* Lock-out toggle */
 .lockout-toggle {
   display: flex;
   justify-content: center;
@@ -116,7 +124,10 @@ body {
   cursor: not-allowed;
 }
 
-/* Challenge tooltip */
+/* ============================================
+   CHALLENGE TOOLTIP
+   ============================================ */
+
 .challenge-tooltip {
   position: fixed;
   z-index: 10000;
@@ -164,6 +175,10 @@ body {
   margin-top: 10px;
   font-size: 0.9em;
 }
+
+/* ============================================
+   FORM ELEMENTS
+   ============================================ */
 
 .input-section {
   margin-bottom: 20px;
@@ -217,20 +232,18 @@ button {
   vertical-align: middle;
 }
 
-/* Control containers - ensure consistent spacing */
-#singlePlayerControls,
-#multiplayerControls {
-  margin-top: 0;
-}
-
 button:hover {
-  background-color: #7b2cbf; /* Darker purple, consistent with theme */
+  background-color: #7b2cbf;
 }
 
 #exchangeBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ============================================
+   GAME BOARD
+   ============================================ */
 
 .board {
   display: grid;
@@ -265,7 +278,7 @@ button:hover {
 }
 
 .cell.marked {
-  background-color: #a5d6a7; /* light green */
+  background-color: #a5d6a7;
 }
 
 .cell.win {
@@ -273,33 +286,39 @@ button:hover {
   box-shadow: 0 0 0 3px rgba(0,191,166,0.35);
 }
 
-
+.exchange-mode .cell {
+  cursor: crosshair;
+  outline: 2px dashed red;
+}
 
 .dropdown {
-	margin-top: 15px;
-	background: white;
-	padding: 10px;
-	border-radius: 8px;
-	box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  margin-top: 15px;
+  background: white;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 
 .dropdown p {
-	margin: 5px 0;
-	font-weight: 500;
+  margin: 5px 0;
+  font-weight: 500;
 }
 
-.exchange-mode .cell {
-    cursor: crosshair;
-    outline: 2px dashed red;
-}
+/* ============================================
+   TIMER
+   ============================================ */
 
 .timer {
   margin-top: 8px;
   font-weight: 700;
   font-size: 20px;
+  display: none;
 }
 
-/* Verify feedback */
+/* ============================================
+   VERIFY FEEDBACK
+   ============================================ */
+
 @keyframes shake {
   10%, 90% { transform: translateX(-2px); }
   20%, 80% { transform: translateX(4px); }
@@ -311,6 +330,10 @@ button:hover {
   animation: shake 0.45s ease;
   box-shadow: 0 0 0 4px rgba(220, 0, 0, 0.25) inset;
 }
+
+/* ============================================
+   LEADERBOARD
+   ============================================ */
 
 .leaderboard {
   margin-top: 16px;
@@ -329,16 +352,18 @@ button:hover {
   padding-left: 18px;
 }
 
-/* Multiplayer UI - Fixed height container approach */
+/* ============================================
+   MULTIPLAYER UI
+   ============================================ */
+
 .multiplayer-section {
   margin-top: 15px;
   position: relative;
-  /* Fixed height - large enough for tallest content (lockout toggle + multiplayer controls) */
-  min-height: 250px;
+  min-height: 0; /* Start with no height, will be calculated */
   width: 100%;
+  transition: min-height 0.2s ease;
 }
 
-/* Mode toggle - always visible at top */
 .game-mode-toggle {
   display: flex;
   gap: 8px;
@@ -348,13 +373,12 @@ button:hover {
   z-index: 10;
 }
 
-/* Lockout toggle - positioned absolutely, shown only in multiplayer */
 #lockoutToggle {
   position: absolute;
-  top: 50px; /* Below toggle buttons */
+  top: 50px;
   left: 0;
   right: 0;
-  display: none; /* Hidden by default */
+  display: none;
   justify-content: center;
   gap: 20px;
   padding: 10px;
@@ -368,67 +392,42 @@ button:hover {
   display: flex;
 }
 
-/* Control containers - positioned absolutely, overlay each other */
 #singlePlayerControls,
 #multiplayerControls {
   position: absolute;
-  top: 50px; /* Below toggle buttons, same as lockout toggle */
+  top: 50px;
   left: 0;
   right: 0;
   margin-top: 0;
   z-index: 1;
-  overflow: hidden; /* Prevent content from causing growth */
+  overflow: hidden; 
 }
 
-/* Single player controls - visible by default */
 #singlePlayerControls {
   display: block;
 }
 
-/* Multiplayer controls - hidden by default */
 #multiplayerControls {
   display: none;
-  max-height: 200px; /* Limit maximum height */
+  max-height: 200px;
 }
 
 #multiplayerControls:not(.hidden) {
   display: block;
+  overflow: visible;
+  max-height: none;
 }
 
 /* When lockout toggle is visible, push controls down */
 #lockoutToggle:not(.hidden) ~ #singlePlayerControls,
 #lockoutToggle:not(.hidden) ~ #multiplayerControls {
-  top: 120px; /* Below lockout toggle */
+  top: 120px;
 }
 
 /* Explicitly reset controls when lockout toggle is hidden */
 #lockoutToggle.hidden ~ #singlePlayerControls,
 #lockoutToggle.hidden ~ #multiplayerControls {
-  top: 50px; /* Reset to default position */
-}
-
-/* Unified visibility system - simple display none/block */
-/* Hide these elements by default (replaces inline styles) */
-#roomInfo,
-#challengeTooltip {
-  display: none;
-}
-
-.hidden {
-  display: none !important;
-}
-
-/* When visible, ensure normal display - override default display: none */
-#roomInfo:not(.hidden),
-#challengeTooltip:not(.hidden),
-#lobby:not(.hidden),
-#startGameBtn:not(.hidden),
-#waitingForHost:not(.hidden),
-#lockOutStats:not(.hidden),
-#countdownMode:not(.hidden),
-#lockConfirm:not(.hidden),
-#recapLog:not(.hidden) {
-  display: block;
+  top: 50px;
 }
 
 .mode-toggle {
@@ -452,6 +451,37 @@ button:hover {
   color: white;
   border-color: #7b2cbf;
 }
+
+/* ============================================
+   VISIBILITY SYSTEM
+   ============================================ */
+
+.hidden {
+  display: none !important;
+}
+
+#roomInfo,
+#challengeTooltip {
+  display: none;
+}
+
+#roomInfo:not(.hidden),
+#challengeTooltip:not(.hidden),
+#lobby:not(.hidden),
+#startGameBtn:not(.hidden),
+#waitingForHost:not(.hidden),
+#lockOutStats:not(.hidden),
+#countdownMode:not(.hidden),
+#lockConfirm:not(.hidden),
+#recapLog:not(.hidden),
+.timer:not(.hidden),
+#welcome:not(.hidden) {
+  display: block;
+}
+
+/* ============================================
+   LOBBY
+   ============================================ */
 
 .join-room-section {
   display: flex;
@@ -490,14 +520,13 @@ button:hover {
   letter-spacing: 4px;
 }
 
-/* Lobby styling */
 #lobby {
   margin-top: 15px;
   padding: 15px;
   background: white;
   border-radius: 8px;
   text-align: center;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
 #lobby h3 {
@@ -528,7 +557,9 @@ button:hover {
   font-size: 16px;
   padding: 12px 24px;
   margin-top: 15px;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
+  position: relative;
+  z-index: 10;
 }
 
 #startGameBtn:hover {
@@ -544,17 +575,20 @@ button:hover {
   color: #666;
   font-style: italic;
   margin-top: 15px;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
-/* Lock-out mode styling */
+/* ============================================
+   LOCK-OUT MODE
+   ============================================ */
+
 .cell.locked-by-opponent {
-  background-color: #ffb3ba; /* light red/pink */
+  background-color: #ffb3ba;
   border: 2px solid #ff6b6b;
 }
 
 .cell.confirming {
-  background-color: #fff9c4; /* light yellow */
+  background-color: #fff9c4;
   border: 2px solid #ffd700;
   transform: scale(1.05);
 }
@@ -566,7 +600,7 @@ button:hover {
   border-radius: 8px;
   text-align: center;
   font-weight: bold;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
 #lockStatsText {
@@ -581,7 +615,7 @@ button:hover {
   border-radius: 8px;
   border: 2px solid #ffd700;
   text-align: center;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
 #countdownMode p:first-child {
@@ -604,7 +638,7 @@ button:hover {
   background: #fff9c4;
   border-radius: 8px;
   text-align: center;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
 #lockConfirm p {
@@ -640,7 +674,7 @@ button:hover {
   max-height: 300px;
   overflow-y: auto;
   text-align: left;
-  display: none; /* Hidden by default, shown via JS */
+  display: none;
 }
 
 #recapLog h3 {
@@ -659,7 +693,10 @@ button:hover {
   border-bottom: 1px solid #eee;
 }
 
-/* Focus states for accessibility */
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
@@ -667,10 +704,13 @@ select:focus-visible {
   outline-offset: 2px;
 }
 
-/* Mobile UX improvements */
+/* ============================================
+   RESPONSIVE
+   ============================================ */
+
 @media (max-width: 600px) {
   body {
-    padding-top: 20px; /* Reduced padding on mobile */
+    padding-top: 20px;
   }
   
   .container { 
@@ -713,22 +753,22 @@ select:focus-visible {
   }
   
   .cell { 
-    font-size: 11px; /* Slightly larger for readability */
-    padding: 8px 4px; /* Better padding for mobile */
+    font-size: 11px;
+    padding: 8px 4px;
   }
   
   input { 
     width: 100%; 
-    min-height: 44px; /* Touch-friendly */
+    min-height: 44px;
   }
   
   button { 
-    min-height: 44px; /* Touch target size */
-    padding: 12px 16px; /* Larger padding for mobile */
+    min-height: 44px;
+    padding: 12px 16px;
   }
   
   select {
-    min-height: 44px; /* Touch-friendly */
+    min-height: 44px;
   }
   
   .join-room-section { 
@@ -740,11 +780,11 @@ select:focus-visible {
   }
   
   #startGameBtn {
-    min-height: 48px; /* Extra large for important action */
+    min-height: 48px;
   }
   
   .challenge-tooltip {
-    max-width: 90vw; /* Full width on mobile */
+    max-width: 90vw;
   }
   
   .tooltip-content {

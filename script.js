@@ -1,17 +1,21 @@
+// ============================================
+// DOM ELEMENTS
+// ============================================
+
 const nameInput = document.getElementById('nameInput');
 const generateBtn = document.getElementById('generateBtn');
 const bingoBoard = document.getElementById('bingoBoard');
 const welcome = document.getElementById('welcome');
 const exchangeBtn = document.getElementById('exchangeBtn');
-const timerEl = document.getElementById('timer');
+const timer = document.getElementById('timer');
 const verifyBtn = document.getElementById('verifyBtn');
 const modeSelect = document.getElementById('modeSelect');
 const minGradeSelect = document.getElementById('minGradeSelect');
 const lockoutRadio = document.getElementById('lockoutRadio');
 const normalRadio = document.getElementById('normalRadio');
-const containerEl = document.getElementById('container');
-
-// Multiplayer elements
+const container = document.getElementById('container');
+const lobby = document.getElementById('lobby');
+const lobbyPlayersList = document.getElementById('lobbyPlayers');
 const singlePlayerBtn = document.getElementById('singlePlayerBtn');
 const multiplayerBtn = document.getElementById('multiplayerBtn');
 const singlePlayerControls = document.getElementById('singlePlayerControls');
@@ -26,7 +30,10 @@ const leaderboard = document.getElementById('leaderboard');
 const leaderboardTitle = document.getElementById('leaderboardTitle');
 const leaderboardList = document.getElementById('leaderboardList');
 
-// Socket.io connection (will be initialized when needed)
+// ============================================
+// STATE VARIABLES
+// ============================================
+
 let socket = null;
 let isMultiplayer = false;
 let currentRoomCode = null;
@@ -34,11 +41,20 @@ let roomStartTime = null;
 let isHost = false;
 let lobbyPlayers = [];
 let currentMode = 'easy';
-let lockedTiles = new Map(); // tileIndex → {playerId, playerName}
+let lockedTiles = new Map(); // tileIndex → {playerId, playerName, timestamp}
 let confirmingTileIndex = null;
 let lockCounts = { myLocks: 0, opponentLocks: 0 };
 let countdownEndTime = null;
 let countdownInterval = null;
+let timerInterval = null;
+let timerStartMs = null;
+let exchangeMode = false;
+let exchangeUsed = false;
+let currentMinGrade = 'green';
+
+// ============================================
+// CONSTANTS & CONFIG
+// ============================================
 
 const CHALLENGES = [
 	"Pink tag -7 holds",
@@ -66,7 +82,7 @@ const CHALLENGES = [
 	// "ALL Pinks b2b" - Removed, generated dynamically based on mode
 	"1 Hand only",
 	"No hands on a volume"
-]
+];
 
 const HARD_CHALLENGES = [
 	"E-limb-ination",
@@ -74,15 +90,8 @@ const HARD_CHALLENGES = [
 	"Graysword Kilter 40°",
 	"Campus",
 	"Feet b4 hands"
-]
+];
 
-let timerInterval = null;
-let timerStartMs = null;
-let exchangeMode = false;
-let exchangeUsed = false;
-let currentMinGrade = 'green'; // Track current min grade
-
-// Challenge explanations dictionary
 const CHALLENGE_EXPLANATIONS = {
 	"Pink tag -7 holds": "Climb a pink tag route subtracting 7 holds",
 	"Yellow tag -5 holds": "Climb a yellow tag route subtracting 5 holds",
@@ -119,26 +128,6 @@ const CHALLENGE_EXPLANATIONS = {
 	"FREE": "Free space - automatically marked"
 };
 
-// Helper function to get explanation for a challenge
-function getChallengeExplanation(challengeText) {
-	if (!challengeText) return null;
-	
-	// Try exact match first
-	if (CHALLENGE_EXPLANATIONS[challengeText]) {
-		return CHALLENGE_EXPLANATIONS[challengeText];
-	}
-	
-	// Try partial matches for variations (e.g., "Pink tag" matches "Pink tag -7 holds")
-	for (const [key, value] of Object.entries(CHALLENGE_EXPLANATIONS)) {
-		if (challengeText.includes(key) || key.includes(challengeText)) {
-			return value;
-		}
-	}
-	
-	return null; // Return null if no explanation found (don't show tooltip)
-}
-
-// Grade order mapping
 const GRADE_ORDER = {
   pink: { name: 'Pink', order: 1 },
   yellow: { name: 'Yellow', order: 2 },
@@ -147,39 +136,83 @@ const GRADE_ORDER = {
   blue: { name: 'Blue', order: 5 }
 };
 
-// Get current game mode (handles lock-out radio button)
-// Lock-out can now work with easy or hard mode
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
 function getCurrentMode() {
-  // Always return the actual mode (easy/hard), even if lock-out is selected
-  return modeSelect ? modeSelect.value : 'easy'; // 'easy' or 'hard'
+  return modeSelect ? modeSelect.value : 'easy';
 }
 
-// Check if lock-out mode is selected
+// Helper: Check if a mode string is lock-out mode
+function isLockOutModeString(mode) {
+	return mode === 'lock-out' || (typeof mode === 'string' && mode.startsWith('lock-out-'));
+}
+
 function isLockOutMode() {
-  return lockoutRadio && lockoutRadio.checked;
+	// Single player: check radio button (UI source of truth)
+	if (!isMultiplayer) {
+		return lockoutRadio && lockoutRadio.checked;
+	}
+	// Multiplayer: check currentMode (server source of truth)
+	if (isMultiplayer && currentMode) {
+		return isLockOutModeString(currentMode);
+	}
+	// Fallback to radio button
+	return lockoutRadio && lockoutRadio.checked;
 }
 
-// Centralized function to update game action buttons (Verify/Exchange) visibility
-// This ensures buttons are only visible when:
-// - A game is in progress (board is displayed)
-// - NOT in lockout mode
+function getCurrentMinGrade() {
+  return minGradeSelect ? minGradeSelect.value : 'green';
+}
+
+function getChallengeExplanation(challengeText) {
+	if (!challengeText) return null;
+	
+	if (CHALLENGE_EXPLANATIONS[challengeText]) {
+		return CHALLENGE_EXPLANATIONS[challengeText];
+	}
+	
+	// try partial matches
+	for (const [key, value] of Object.entries(CHALLENGE_EXPLANATIONS)) {
+		if (challengeText.includes(key) || key.includes(challengeText)) {
+			return value;
+		}
+	}
+	
+	return null;
+}
+
+function formatMs(ms) {
+	const totalSeconds = Math.floor(ms / 1000);
+	const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+	const seconds = String(totalSeconds % 60).padStart(2, '0');
+	return `${minutes}:${seconds}`;
+}
+
+function toggleVisibility(element, show) {
+	if (!element) return;
+	if (show) {
+		element.classList.remove('hidden');
+		element.style.removeProperty('display');
+	} else {
+		element.classList.add('hidden');
+	}
+}
+
+// ============================================
+// UI UPDATES
+// ============================================
+
 function updateGameActionButtons() {
-  // Check if board is visible - check both inline style and if board has content
-  // Board is visible if: display is 'grid' OR board has children (cells) and is not explicitly hidden
   const boardHasContent = bingoBoard && bingoBoard.children.length > 0;
   const boardDisplayStyle = bingoBoard ? bingoBoard.style.display : '';
   const boardIsHidden = boardDisplayStyle === 'none';
   const boardVisible = boardHasContent && !boardIsHidden;
   
-  // Check if in lockout mode (single player or multiplayer)
-  const isLockout = isLockOutMode() || 
-                    (isMultiplayer && currentMode && 
-                     (currentMode === 'lock-out' || (typeof currentMode === 'string' && currentMode.startsWith('lock-out-'))));
-  
-  // Buttons should only be visible when board is visible AND not in lockout mode
+  const isLockout = isLockOutMode();
   const shouldShow = boardVisible && !isLockout;
   
-  // Update verify button
   if (verifyBtn) {
     toggleVisibility(verifyBtn, shouldShow);
     if (shouldShow) {
@@ -187,7 +220,6 @@ function updateGameActionButtons() {
     }
   }
   
-  // Update exchange button
   if (exchangeBtn) {
     toggleVisibility(exchangeBtn, shouldShow);
     if (shouldShow) {
@@ -196,58 +228,259 @@ function updateGameActionButtons() {
   }
 }
 
-// Get current min grade
-function getCurrentMinGrade() {
-  return minGradeSelect ? minGradeSelect.value : 'green';
+function updateWelcomeMessage() {
+	if (!welcome) return;
+	const gradeName = GRADE_ORDER[currentMinGrade]?.name || 'Green';
+	welcome.textContent = `Minimum Grade : ${gradeName}`;
+	toggleVisibility(welcome, true);
 }
 
-// Update UI when lock-out mode changes
-// Note: Lock-out mode no longer disables other options - you can use any mode/grade with lock-out
-function updateModeUI() {
-  // No longer disabling controls - lock-out works with any settings
-  // This function is kept for potential future UI updates but doesn't disable anything
+function showBoard() {
+	if (bingoBoard) {
+		bingoBoard.style.display = 'grid';
+		bingoBoard.classList.remove('hidden');
+	}
 }
 
-// Initialize mode UI handlers
-if (lockoutRadio && normalRadio) {
-  lockoutRadio.addEventListener('change', updateModeUI);
-  normalRadio.addEventListener('change', updateModeUI);
-  // Set initial state
-  updateModeUI();
+// Update exchange button disabled state based on exchangeUsed
+function updateExchangeButtonState() {
+	if (!exchangeBtn) return;
+	exchangeBtn.disabled = !!exchangeUsed;
+	exchangeBtn.style.opacity = exchangeUsed ? '0.5' : '';
+	exchangeBtn.style.cursor = exchangeUsed ? 'not-allowed' : 'pointer';
 }
 
-// Hide lockout toggle on initial load (single player is default)
-const lockoutToggle = document.getElementById('lockoutToggle');
-if (lockoutToggle) {
-  toggleVisibility(lockoutToggle, false);
+// scale height of multiplayer section based on visible content
+function updateMultiplayerSectionHeight() {
+	const section = document.querySelector('.multiplayer-section');
+	if (!section) return;
+	
+	const modeToggle = document.querySelector('.game-mode-toggle');
+	const lockoutToggle = document.getElementById('lockoutToggle');
+	const singlePlayerControls = document.getElementById('singlePlayerControls');
+	const multiplayerControls = document.getElementById('multiplayerControls');
+	
+	let maxBottom = 0;
+	
+	if (modeToggle) {
+		const modeToggleRect = modeToggle.getBoundingClientRect();
+		const sectionRect = section.getBoundingClientRect();
+		const modeToggleBottom = (modeToggleRect.bottom - sectionRect.top) + modeToggle.offsetHeight;
+		maxBottom = Math.max(maxBottom, modeToggleBottom);
+	}
+	
+	if (lockoutToggle && !lockoutToggle.classList.contains('hidden')) {
+		const lockoutRect = lockoutToggle.getBoundingClientRect();
+		const sectionRect = section.getBoundingClientRect();
+		const lockoutBottom = (lockoutRect.bottom - sectionRect.top);
+		maxBottom = Math.max(maxBottom, lockoutBottom);
+	}
+	
+	if (singlePlayerControls && !singlePlayerControls.classList.contains('hidden')) {
+		const controlsRect = singlePlayerControls.getBoundingClientRect();
+		const sectionRect = section.getBoundingClientRect();
+		const controlsBottom = (controlsRect.bottom - sectionRect.top);
+		maxBottom = Math.max(maxBottom, controlsBottom);
+	}
+	
+	if (multiplayerControls && !multiplayerControls.classList.contains('hidden')) {
+		const controlsRect = multiplayerControls.getBoundingClientRect();
+		const sectionRect = section.getBoundingClientRect();
+		
+		let maxChildBottom = controlsRect.bottom - sectionRect.top;
+		
+		const children = multiplayerControls.children;
+		for (let i = 0; i < children.length; i++) {
+			const child = children[i];
+			const style = window.getComputedStyle(child);
+			if (style.display !== 'none' && !child.classList.contains('hidden')) {
+				const childRect = child.getBoundingClientRect();
+				const childBottom = childRect.bottom - sectionRect.top;
+				maxChildBottom = Math.max(maxChildBottom, childBottom);
+			}
+		}
+		
+		maxBottom = Math.max(maxBottom, maxChildBottom);
+	}
+	
+	const padding = 30;
+	const calculatedHeight = maxBottom + padding;
+	const minHeight = modeToggle ? Math.max(modeToggle.offsetHeight + 20, 80) : 80;
+	section.style.minHeight = `${Math.max(calculatedHeight, minHeight)}px`;
 }
 
-// Initialize Socket.io connection (lazy - only when needed for multiplayer)
+// ============================================
+// SOCKET.IO
+// ============================================
+
+// Helper: Setup lobby UI (used by both roomCreated and roomJoined)
+function setupLobbyUI(roomCode, mode, isHostParam, players, minGrade = null) {
+	currentRoomCode = roomCode;
+	lobbyPlayers = players;
+	roomCodeDisplay.textContent = roomCode;
+	toggleVisibility(roomInfo, true);
+	setTimeout(updateMultiplayerSectionHeight, 0);
+	
+	// Update UI to match room settings
+	const isLockout = isLockOutModeString(mode);
+	if (isLockout) {
+		if (lockoutRadio) lockoutRadio.checked = true;
+		if (normalRadio) normalRadio.checked = false;
+		if (mode === 'lock-out-easy' || mode === 'lock-out') {
+			if (modeSelect) modeSelect.value = 'easy';
+		} else if (mode === 'lock-out-hard') {
+			if (modeSelect) modeSelect.value = 'hard';
+		}
+	} else {
+		if (normalRadio) normalRadio.checked = true;
+		if (lockoutRadio) lockoutRadio.checked = false;
+		if (modeSelect) modeSelect.value = mode;
+	}
+	
+	if (minGrade && minGradeSelect) {
+		minGradeSelect.value = minGrade;
+		currentMinGrade = minGrade;
+	}
+	
+	updateWelcomeMessage();
+	showLobby(players, isHostParam);
+}
+
+// Helper: Update lobby when player list changes
+function handlePlayerListUpdate(name, players, action) {
+	lobbyPlayers = players;
+	updateLobbyPlayers(players);
+	updateStartGameButton();	// in case of host change
+	console.log(`${name} ${action} the room`);
+}
+
+// Helper: Setup game UI based on mode
+function setupGameUI(mode, board, startTime, marked = null, lockedTilesData = null, lockCountsData = null, countdownMode = false, countdownEndTimeParam = null, leaderboardData = null, minGrade = null) {
+	roomStartTime = startTime;
+	currentMode = mode;
+	
+	if (minGrade) {
+		currentMinGrade = minGrade;
+	}
+	
+	updateWelcomeMessage();
+	hideLobby();
+	
+	// Set mode and render board
+	const isLockoutMode = isLockOutModeString(mode);
+	if (isLockoutMode) {
+		if (lockoutRadio) lockoutRadio.checked = true;
+		if (normalRadio) normalRadio.checked = false;
+		if (mode === 'lock-out-easy' || mode === 'lock-out') {
+			if (modeSelect) modeSelect.value = 'easy';
+		} else if (mode === 'lock-out-hard') {
+			if (modeSelect) modeSelect.value = 'hard';
+		}
+	} else {
+		if (normalRadio) normalRadio.checked = true;
+		if (lockoutRadio) lockoutRadio.checked = false;
+		if (modeSelect) modeSelect.value = mode;
+	}
+	
+	if (minGrade && minGradeSelect) {
+		minGradeSelect.value = minGrade;
+	}
+	
+	// Show common game elements
+	showBoard();
+	if (timer) {
+		toggleVisibility(timer, true);
+		timer.style.display = 'block';
+	}
+	
+	// Show lock-out mode UI
+	if (isLockoutMode) {
+		if (lockedTilesData) {
+			lockedTiles = new Map(Object.entries(lockedTilesData).map(([key, value]) => [parseInt(key), value]));
+		} else {
+			lockedTiles = new Map();
+		}
+		if (lockCountsData) {
+			const myId = socket?.id;
+			lockCounts.myLocks = myId ? (lockCountsData[myId] || 0) : 0;
+			const opponentId = myId ? Object.keys(lockCountsData).find(id => id !== myId) : null;
+			lockCounts.opponentLocks = opponentId ? (lockCountsData[opponentId] || 0) : 0;
+		} else {
+			lockCounts = { myLocks: 0, opponentLocks: 0 };
+		}
+		confirmingTileIndex = null;
+		updateGameActionButtons();
+		toggleVisibility(document.getElementById('lockOutStats'), true);
+		updateLockStats();
+		
+		if (countdownMode && countdownEndTimeParam) {
+			countdownEndTime = countdownEndTimeParam;
+			toggleVisibility(document.getElementById('countdownMode'), true);
+			startCountdown();
+		} else {
+			toggleVisibility(document.getElementById('countdownMode'), false);
+		}
+		toggleVisibility(document.getElementById('lockConfirm'), false);
+		toggleVisibility(document.getElementById('recapLog'), false);
+		toggleVisibility(leaderboard, false);
+	} else {
+		// Show normal mode UI
+		updateGameActionButtons();
+		toggleVisibility(document.getElementById('lockOutStats'), false);
+		toggleVisibility(document.getElementById('countdownMode'), false);
+		toggleVisibility(document.getElementById('lockConfirm'), false);
+		toggleVisibility(document.getElementById('recapLog'), false);
+		toggleVisibility(leaderboard, true);
+		leaderboardTitle.textContent = 'Room Leaderboard';
+		if (leaderboardData && leaderboardData.length > 0) {
+			renderMultiplayerLeaderboard(leaderboardData.map((entry, index) => ({
+				position: index + 1,
+				name: entry.name,
+				elapsedMs: entry.elapsedMs
+			})));
+		} else {
+			leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
+		}
+	}
+	
+	renderBoard(board, marked || []);
+	
+	// Save game state for single player
+	if (!isMultiplayer) {
+		saveData(nameInput.value.trim(), board);
+		StorageManager.saveGameState({ marked: marked || [] });
+		if (!marked) {
+			exchangeUsed = false;
+			StorageManager.saveGameState({ exchangeUsed: false });
+		}
+	}
+	updateExchangeButtonState();
+	updateGameActionButtons();
+	
+	timerStartMs = startTime;
+	updateTimer();
+	if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
+}
+
 function initSocket() {
 	if (socket) return socket;
 	
-	// Backend URL can be set via data-backend-url attribute in HTML
-	// For local development: leave empty to auto-detect localhost
-	// For production: set to your backend URL (e.g., "https://boulderingo.onrender.com")
+	// Determine server URL from data-backend-url attribute or auto-detect
 	const backendUrl = (document.body.dataset.backendUrl || '').trim();
-	
-	// Determine server URL
 	let serverUrl;
+	
 	if (backendUrl) {
-		// Use explicitly set backend URL
 		serverUrl = backendUrl;
 	} else if (window.location.protocol === 'file:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-		// Local development - always use localhost:3000
 		serverUrl = 'http://localhost:3000';
 	} else {
-		// Production - if no backend URL set, try same origin (won't work if backend is on different domain)
-		// You should set data-backend-url attribute with your backend URL
 		console.warn('No backend URL configured. Set data-backend-url attribute in <body> tag with your backend URL.');
 		serverUrl = window.location.origin;
 	}
 	
 	socket = io(serverUrl);
 	
+	// Connection Events
 	socket.on('connect', () => {
 		console.log('Connected to server');
 	});
@@ -256,42 +489,7 @@ function initSocket() {
 		console.log('Disconnected from server');
 	});
 	
-	// Helper: Setup lobby UI (used by both roomCreated and roomJoined)
-	function setupLobbyUI(roomCode, mode, isHost, players, minGrade = null) {
-		currentRoomCode = roomCode;
-		isHost = isHost;
-		lobbyPlayers = players;
-		roomCodeDisplay.textContent = roomCode;
-		toggleVisibility(roomInfo, true);
-		
-		// Update UI to match room settings
-		// Check if mode is lock-out (could be 'lock-out', 'lock-out-easy', or 'lock-out-hard')
-		const isLockout = mode === 'lock-out' || (typeof mode === 'string' && mode.startsWith('lock-out-'));
-		if (isLockout) {
-			if (lockoutRadio) lockoutRadio.checked = true;
-			if (normalRadio) normalRadio.checked = false;
-			// Extract base mode from lock-out mode
-			if (mode === 'lock-out-easy' || mode === 'lock-out') {
-				if (modeSelect) modeSelect.value = 'easy';
-			} else if (mode === 'lock-out-hard') {
-				if (modeSelect) modeSelect.value = 'hard';
-			}
-		} else {
-			if (normalRadio) normalRadio.checked = true;
-			if (lockoutRadio) lockoutRadio.checked = false;
-			if (modeSelect) modeSelect.value = mode;
-		}
-		
-		if (minGrade && minGradeSelect) {
-			minGradeSelect.value = minGrade;
-			currentMinGrade = minGrade;
-		}
-		
-		updateModeUI(); // Disable/enable controls based on mode
-		showLobby(players, isHost);
-	}
-	
-	// Both roomCreated and roomJoined do the same thing - merge handlers
+	// Room Events
 	socket.on('roomCreated', ({ roomCode, mode, isHost, players, minGrade }) => {
 		setupLobbyUI(roomCode, mode, isHost, players, minGrade);
 	});
@@ -304,13 +502,7 @@ function initSocket() {
 		alert(`Error: ${message}`);
 	});
 	
-	// Helper: Update lobby when player list changes
-	function handlePlayerListUpdate(name, players, action) {
-		lobbyPlayers = players;
-		updateLobbyPlayers(players);
-		console.log(`${name} ${action} the room`);
-	}
-	
+	// Player Events
 	socket.on('playerJoined', ({ name, players }) => {
 		handlePlayerListUpdate(name, players, 'joined');
 	});
@@ -323,141 +515,13 @@ function initSocket() {
 		handlePlayerListUpdate(name, players, 'rejoined');
 	});
 	
-	// Helper: Setup game UI based on mode
-	function setupGameUI(mode, board, startTime, marked = null, lockedTilesData = null, lockCountsData = null, countdownMode = false, countdownEndTimeParam = null, leaderboardData = null, minGrade = null) {
-		roomStartTime = startTime;
-		currentMode = mode;
-		
-		// Update min grade
-		if (minGrade) {
-			currentMinGrade = minGrade;
-		}
-		
-		// Update welcome message with min grade requirement
-		const gradeName = GRADE_ORDER[currentMinGrade]?.name || 'Green';
-		if (welcome && nameInput.value.trim()) {
-			welcome.textContent = `Welcome, ${nameInput.value.trim()}! (Min: ${gradeName} or above)`;
-		}
-		
-		// Hide lobby first
-		hideLobby();
-		
-		// Set mode and render board
-		// Check if mode is lock-out (could be 'lock-out', 'lock-out-easy', or 'lock-out-hard')
-		const isLockoutMode = mode === 'lock-out' || (typeof mode === 'string' && mode.startsWith('lock-out-'));
-		if (isLockoutMode) {
-			if (lockoutRadio) lockoutRadio.checked = true;
-			if (normalRadio) normalRadio.checked = false;
-			// Extract base mode from lock-out mode
-			if (mode === 'lock-out-easy' || mode === 'lock-out') {
-				if (modeSelect) modeSelect.value = 'easy';
-			} else if (mode === 'lock-out-hard') {
-				if (modeSelect) modeSelect.value = 'hard';
-			}
-		} else {
-			if (normalRadio) normalRadio.checked = true;
-			if (lockoutRadio) lockoutRadio.checked = false;
-			if (modeSelect) modeSelect.value = mode;
-		}
-		
-		if (minGrade && minGradeSelect) {
-			minGradeSelect.value = minGrade;
-		}
-		
-		updateModeUI(); // Disable/enable controls
-		
-		// Show common game elements
-		if (bingoBoard) {
-			bingoBoard.style.display = 'grid';
-			bingoBoard.classList.remove('hidden');
-		}
-		if (timerEl) {
-			toggleVisibility(timerEl, true);
-			timerEl.style.display = 'block'; // Timer needs block display
-		}
-		
-		// Initialize lock-out mode (check if mode is lock-out variant)
-		if (isLockoutMode) {
-			if (lockedTilesData) {
-				lockedTiles = new Map(Object.entries(lockedTilesData).map(([key, value]) => [parseInt(key), value]));
-			} else {
-				lockedTiles = new Map();
-			}
-			if (lockCountsData) {
-				const myId = socket.id;
-				lockCounts.myLocks = lockCountsData[myId] || 0;
-				const opponentId = Object.keys(lockCountsData).find(id => id !== myId);
-				lockCounts.opponentLocks = opponentId ? (lockCountsData[opponentId] || 0) : 0;
-			} else {
-				lockCounts = { myLocks: 0, opponentLocks: 0 };
-			}
-			confirmingTileIndex = null;
-			updateGameActionButtons(); // Hide verify/exchange buttons in lockout mode
-			toggleVisibility(document.getElementById('lockOutStats'), true);
-			updateLockStats();
-			
-			// Restore countdown if active
-			if (countdownMode && countdownEndTimeParam) {
-				countdownEndTime = countdownEndTimeParam; // Assign parameter to global variable
-				toggleVisibility(document.getElementById('countdownMode'), true);
-				startCountdown();
-			} else {
-				toggleVisibility(document.getElementById('countdownMode'), false);
-			}
-			toggleVisibility(document.getElementById('lockConfirm'), false);
-			toggleVisibility(document.getElementById('recapLog'), false);
-			toggleVisibility(leaderboard, false);
-		} else {
-			// Regular multiplayer mode (easy/hard)
-			updateGameActionButtons(); // Show verify/exchange buttons in normal mode
-			toggleVisibility(document.getElementById('lockOutStats'), false);
-			toggleVisibility(document.getElementById('countdownMode'), false);
-			toggleVisibility(document.getElementById('lockConfirm'), false);
-			toggleVisibility(document.getElementById('recapLog'), false);
-			toggleVisibility(leaderboard, true);
-			leaderboardTitle.textContent = 'Room Leaderboard';
-			if (leaderboardData && leaderboardData.length > 0) {
-				renderMultiplayerLeaderboard(leaderboardData.map((entry, index) => ({
-					position: index + 1,
-					name: entry.name,
-					elapsedMs: entry.elapsedMs
-				})));
-			} else {
-				leaderboardList.innerHTML = '<li>Waiting for players to finish...</li>';
-			}
-		}
-		
-		// Render board with marked tiles if provided
-		renderBoard(board, marked || []);
-		
-		// Only save to localStorage for single player games (multiplayer board comes from server)
-		if (!isMultiplayer) {
-			saveData(nameInput.value.trim(), board);
-			// Restore marked state if provided
-			StorageManager.saveGameState({ marked: marked || [] });
-			// Reset exchange if starting fresh
-			if (!marked) {
-				exchangeUsed = false;
-				StorageManager.saveGameState({ exchangeUsed: false });
-			}
-		}
-		updateExchangeButtonState();
-		updateGameActionButtons(); // Update button visibility after game setup
-		
-		// Start timer from room start time
-		timerStartMs = startTime;
-		updateTimer();
-		if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-	}
-	
+	// Game Events
 	socket.on('gameStarted', ({ roomCode, board, mode, startTime, minGrade }) => {
-		// Ensure multiplayer mode is set (important for rejoin scenarios)
 		isMultiplayer = true;
 		setupGameUI(mode, board, startTime, null, null, null, false, null, null, minGrade);
 	});
 	
 	socket.on('gameRejoined', ({ roomCode, board, mode, startTime, marked, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts, countdownMode, countdownEndTime, leaderboard: roomLeaderboard, minGrade }) => {
-		// Ensure multiplayer mode is set (important for rejoin scenarios)
 		isMultiplayer = true;
 		setupGameUI(mode, board, startTime, marked, serverLockedTiles, serverLockCounts, countdownMode, countdownEndTime, roomLeaderboard, minGrade);
 	});
@@ -471,26 +535,20 @@ function initSocket() {
 		updateStartGameButton();
 	});
 	
+	// Lock-Out Mode Events
 	socket.on('tileLocked', ({ tileIndex, playerId, playerName, timestamp, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts }) => {
-		// Update locked tiles map
 		lockedTiles.set(tileIndex, { playerId, playerName, timestamp });
 		
-		// Update lock counts
 		if (serverLockCounts) {
-			const myId = socket.id;
-			lockCounts.myLocks = serverLockCounts[myId] || 0;
-			// Find opponent's count
-			const opponentId = Object.keys(serverLockCounts).find(id => id !== myId);
+			const myId = socket?.id;
+			lockCounts.myLocks = myId ? (serverLockCounts[myId] || 0) : 0;
+			const opponentId = myId ? Object.keys(serverLockCounts).find(id => id !== myId) : null;
 			lockCounts.opponentLocks = opponentId ? (serverLockCounts[opponentId] || 0) : 0;
 		}
 		
-		// Update board visuals
-		updateLockedTileVisual(tileIndex, playerId === socket.id);
-		
-		// Update stats
+		updateLockedTileVisual(tileIndex, playerId === socket?.id);
 		updateLockStats();
 		
-		// Cancel confirmation if this was the tile being confirmed
 		if (confirmingTileIndex === tileIndex) {
 			cancelTileConfirmation();
 		}
@@ -504,7 +562,7 @@ function initSocket() {
 	socket.on('lockOutWin', ({ winnerId, winnerName, elapsedMs, lockHistory, winType }) => {
 		stopTimer();
 		stopCountdown();
-		const finalTime = timerEl ? timerEl.textContent : '';
+		const finalTime = timer ? timer.textContent : '';
 		highlightWinningLines(getWinningLines());
 		
 		let message = `🎉 ${winnerName} wins! 🎉\nTime: ${finalTime}`;
@@ -512,14 +570,12 @@ function initSocket() {
 			message += '\nWin Type: Bingo!';
 		}
 		alert(message);
-		
-		// Show recap log
 		showRecapLog(lockHistory);
 	});
 	
 	socket.on('countdownModeStarted', ({ endTime }) => {
 		countdownEndTime = endTime;
-		document.getElementById('countdownMode').style.display = 'block';
+		toggleVisibility(document.getElementById('countdownMode'), true);
 		startCountdown();
 	});
 	
@@ -538,11 +594,10 @@ function initSocket() {
 			message = `🎉 ${winnerName} wins! 🎉\nWin Type: Most tiles locked`;
 		}
 		alert(message);
-		
-		// Show recap log
 		showRecapLog(lockHistory);
 	});
 	
+	// Leaderboard & Verification Events
 	socket.on('leaderboardUpdate', ({ leaderboard: roomLeaderboard }) => {
 		renderMultiplayerLeaderboard(roomLeaderboard);
 	});
@@ -550,7 +605,7 @@ function initSocket() {
 	socket.on('verifyResult', ({ valid, elapsedMs, position, message }) => {
 		if (valid) {
 			stopTimer();
-			const finalTime = timerEl ? timerEl.textContent : '';
+			const finalTime = timer ? timer.textContent : '';
 			const lines = getWinningLines();
 			highlightWinningLines(lines);
 			alert(`🎉 You win! 🎉\nTime: ${finalTime}\nPosition: ${position}`);
@@ -558,9 +613,9 @@ function initSocket() {
 			if (message) {
 				alert(message);
 			} else {
-				if (containerEl) {
-					containerEl.classList.add('verify-fail');
-					setTimeout(() => containerEl.classList.remove('verify-fail'), 500);
+				if (container) {
+					container.classList.add('verify-fail');
+					setTimeout(() => container.classList.remove('verify-fail'), 500);
 				}
 			}
 		}
@@ -569,8 +624,6 @@ function initSocket() {
 	return socket;
 }
 
-// Helper function to ensure socket is ready (only called for multiplayer)
-// Returns a promise that resolves to true if connected, false if connection failed
 async function ensureSocketReady() {
 	if (!socket) {
 		socket = initSocket();
@@ -599,11 +652,126 @@ async function ensureSocketReady() {
 	});
 }
 
-function formatMs(ms) {
-	const totalSeconds = Math.floor(ms / 1000);
+// ============================================
+// TIMER
+// ============================================
+
+function stopTimer() {
+	if (timerInterval) {
+		clearInterval(timerInterval);
+		timerInterval = null;
+	}
+	if (!isMultiplayer) {
+		if (timerStartMs != null) {
+			const stoppedElapsed = Date.now() - timerStartMs;
+			StorageManager.saveTimerState({ running: false, elapsedMs: stoppedElapsed });
+		} else {
+			StorageManager.saveTimerState({ running: false });
+		}
+	}
+}
+
+function updateTimer() {
+	if (timerStartMs == null) return;
+	const elapsed = Date.now() - timerStartMs;
+	const totalSeconds = Math.floor(elapsed / 1000);
 	const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
 	const seconds = String(totalSeconds % 60).padStart(2, '0');
-	return `${minutes}:${seconds}`;
+	if (timer) timer.textContent = `${minutes}:${seconds}`;
+}
+
+function startTimer() {
+	stopTimer();
+	timerStartMs = Date.now();
+	if (timer) timer.textContent = '00:00';
+	timerInterval = setInterval(updateTimer, 1000);
+	if (!isMultiplayer) {
+		StorageManager.saveTimerState({ running: true, startMs: timerStartMs, elapsedMs: null });
+	}
+}
+
+// ============================================
+// LOBBY
+// ============================================
+
+function hideGameElements() {
+	toggleVisibility(bingoBoard, false);
+	updateGameActionButtons();
+	toggleVisibility(leaderboard, false);
+	toggleVisibility(timer, false);
+	toggleVisibility(document.getElementById('lockOutStats'), false);
+	toggleVisibility(document.getElementById('countdownMode'), false);
+	toggleVisibility(document.getElementById('lockConfirm'), false);
+	toggleVisibility(document.getElementById('recapLog'), false);
+}
+
+function showLobby(players, hostStatus) {
+	isHost = hostStatus;
+	lobbyPlayers = players;
+	
+	hideGameElements();
+	
+	if (lobby) {
+		toggleVisibility(lobby, true);
+		updateLobbyPlayers(players);
+		updateStartGameButton();
+	}
+	
+	setTimeout(updateMultiplayerSectionHeight, 0);
+}
+
+function hideLobby() {
+	toggleVisibility(lobby, false);
+	setTimeout(updateMultiplayerSectionHeight, 0);
+}
+
+function updateLobbyPlayers(players) {
+	if (lobbyPlayersList) {
+		lobbyPlayersList.innerHTML = '';
+		players.forEach((player) => {
+			const li = document.createElement('li');
+			let playerText = player.name;
+			if (socket && player.id === socket.id) {
+				if (isHost) {
+					playerText += ' (You - Host)';
+				} else {
+					playerText += ' (You)';
+				}
+			}
+			li.textContent = playerText;
+			lobbyPlayersList.appendChild(li);
+		});
+	}
+	
+	if (roomPlayers) {
+		roomPlayers.textContent = `Players: ${players.length}`;
+	}
+	
+	setTimeout(updateMultiplayerSectionHeight, 0);
+}
+
+function updateStartGameButton() {
+	const startGameBtn = document.getElementById('startGameBtn');
+	const waitingForHost = document.getElementById('waitingForHost');
+	
+	if (startGameBtn) {
+		toggleVisibility(startGameBtn, isHost);
+		if (isHost) {
+			startGameBtn.style.display = 'block';
+		} else {
+			startGameBtn.style.removeProperty('display');
+		}
+		startGameBtn.disabled = false;
+		startGameBtn.textContent = 'Start Game';
+	}
+	if (waitingForHost) {
+		toggleVisibility(waitingForHost, !isHost);
+		if (!isHost) {
+			waitingForHost.style.display = 'block';
+		} else {
+			waitingForHost.style.removeProperty('display');
+		}
+	}
 }
 
 function renderMultiplayerLeaderboard(roomLeaderboard) {
@@ -622,113 +790,6 @@ function renderMultiplayerLeaderboard(roomLeaderboard) {
 	});
 }
 
-// Lobby functions
-function showLobby(players, hostStatus) {
-	isHost = hostStatus;
-	lobbyPlayers = players;
-	
-	// Hide ALL game elements
-	toggleVisibility(bingoBoard, false);
-	updateGameActionButtons(); // Hide buttons when in lobby
-	toggleVisibility(leaderboard, false);
-	toggleVisibility(timerEl, false);
-	toggleVisibility(document.getElementById('lockOutStats'), false);
-	toggleVisibility(document.getElementById('countdownMode'), false);
-	toggleVisibility(document.getElementById('lockConfirm'), false);
-	toggleVisibility(document.getElementById('recapLog'), false);
-	
-	// Show lobby
-	const lobbyEl = document.getElementById('lobby');
-	if (lobbyEl) {
-		toggleVisibility(lobbyEl, true);
-		updateLobbyPlayers(players);
-		updateStartGameButton();
-	}
-}
-
-function hideLobby() {
-	toggleVisibility(document.getElementById('lobby'), false);
-	// Don't show game elements here - let gameStarted/gameRejoined handlers do it
-	// This ensures proper mode-based visibility
-}
-
-function updateLobbyPlayers(players) {
-	const lobbyPlayersEl = document.getElementById('lobbyPlayers');
-	if (lobbyPlayersEl) {
-		lobbyPlayersEl.innerHTML = '';
-		players.forEach((player) => {
-			const li = document.createElement('li');
-			let playerText = player.name;
-			if (socket && player.id === socket.id) {
-				if (isHost) {
-					playerText += ' (You - Host)';
-				} else {
-					playerText += ' (You)';
-				}
-			}
-			li.textContent = playerText;
-			lobbyPlayersEl.appendChild(li);
-		});
-	}
-	
-	// Update player count
-	if (roomPlayers) {
-		roomPlayers.textContent = `Players: ${players.length}`;
-	}
-}
-
-function updateStartGameButton() {
-	const startGameBtn = document.getElementById('startGameBtn');
-	const waitingForHost = document.getElementById('waitingForHost');
-	if (startGameBtn) {
-		toggleVisibility(startGameBtn, isHost);
-		if (isHost) startGameBtn.style.display = 'block';
-		startGameBtn.disabled = false;
-		startGameBtn.textContent = 'Start Game';
-	}
-	if (waitingForHost) {
-		toggleVisibility(waitingForHost, !isHost);
-		if (!isHost) waitingForHost.style.display = 'block';
-	}
-}
-
-function stopTimer() {
-	if (timerInterval) {
-		clearInterval(timerInterval);
-		timerInterval = null;
-	}
-	// Only persist timer state for single player games (multiplayer timer is server-managed)
-	if (!isMultiplayer) {
-		if (timerStartMs != null) {
-			const stoppedElapsed = Date.now() - timerStartMs;
-			StorageManager.saveTimerState({ running: false, elapsedMs: stoppedElapsed });
-		} else {
-			StorageManager.saveTimerState({ running: false });
-		}
-	}
-	// For multiplayer, timer state is managed by server - don't save to localStorage
-}
-
-function updateTimer() {
-	if (timerStartMs == null) return;
-	const elapsed = Date.now() - timerStartMs;
-	const totalSeconds = Math.floor(elapsed / 1000);
-	const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-	const seconds = String(totalSeconds % 60).padStart(2, '0');
-	if (timerEl) timerEl.textContent = `${minutes}:${seconds}`;
-}
-
-function startTimer() {
-	stopTimer();
-	timerStartMs = Date.now();
-	if (timerEl) timerEl.textContent = '00:00';
-	timerInterval = setInterval(updateTimer, 1000);
-	// Only persist timer state for single player games (multiplayer timer is server-managed)
-	if (!isMultiplayer) {
-		StorageManager.saveTimerState({ running: true, startMs: timerStartMs, elapsedMs: null });
-	}
-}
-
 function getChallengePool(mode = null, minGrade = null) {
 	const currentMode = mode || (modeSelect && modeSelect.value) || 'easy';
 	const currentMinGrade = minGrade || getCurrentMinGrade();
@@ -736,7 +797,6 @@ function getChallengePool(mode = null, minGrade = null) {
 	let pool = currentMode === 'hard' ? [...CHALLENGES, ...HARD_CHALLENGES] : [...CHALLENGES];
 	
 	// Add dynamic "Pinks b2b" challenge based on mode
-	// Only add if minGrade is not pink (can't do pinks if pink is minimum)
 	if (currentMinGrade !== 'pink') {
 		const pinksChallenge = currentMode === 'hard' ? "10 Pinks b2b" : "5 Pinks b2b";
 		pool.push(pinksChallenge);
@@ -750,13 +810,11 @@ function getChallengePool(mode = null, minGrade = null) {
 }
 
 function generateBoard() {
-	// get items
 	const mode = (modeSelect && modeSelect.value) || 'easy';
 	const minGrade = getCurrentMinGrade();
 	const poolSource = getChallengePool(mode, minGrade);
 	const validItems = poolSource.filter(item => item.trim() !== "" && item !== "—");
-	// ensure min items - if we don't have enough, just use what we have (shouldn't happen with dynamic challenges)
-	const pool = validItems.length >= 25 ? validItems : validItems;
+	const pool = validItems;
 	// shuffle list
 	const shuffled = [...pool].sort(() => 0.5 - Math.random());
 	// select for board (take up to 25, or all if less)
@@ -768,13 +826,13 @@ function generateBoard() {
 	return board;
 }
 
-// Tooltip management
-let tooltipTimer = null;
-let currentTooltipCell = null;
-let pressTimer = null;
-const LONG_PRESS_DURATION = 500; // 500ms for long press
+// ============================================
+// TOOLTIP MANAGEMENT
+// ============================================
 
-// Setup tooltip for a cell
+let currentTooltipCell = null;
+const LONG_PRESS_DURATION = 500;
+
 function setupChallengeTooltip(cell, challengeText) {
 	const tooltip = document.getElementById('challengeTooltip');
 	const tooltipTitle = document.getElementById('tooltipTitle');
@@ -782,7 +840,6 @@ function setupChallengeTooltip(cell, challengeText) {
 	
 	if (!tooltip || !tooltipTitle || !tooltipText) return;
 	
-	// Store tooltip state on the cell element itself
 	let cellPressTimer = null;
 	let cellPressStartTime = 0;
 	let cellTooltipShown = false;
@@ -790,27 +847,24 @@ function setupChallengeTooltip(cell, challengeText) {
 	function showTooltip(e) {
 		const explanation = getChallengeExplanation(challengeText);
 		if (!explanation) {
-			return; // Don't show tooltip if no explanation
+			return;
 		}
 		
 		tooltipTitle.textContent = challengeText;
 		tooltipText.textContent = explanation;
 		toggleVisibility(tooltip, true);
-		tooltip.style.display = 'block'; // Tooltip needs specific positioning
+		tooltip.style.display = 'block';
 		
-		// Position tooltip near the cell
 		const rect = cell.getBoundingClientRect();
 		const tooltipRect = tooltip.getBoundingClientRect();
 		const scrollY = window.scrollY || window.pageYOffset;
 		const scrollX = window.scrollX || window.pageXOffset;
 		
-		// Try to position above, fallback to below
 		let top = rect.top + scrollY - tooltipRect.height - 10;
 		let left = rect.left + scrollX + (rect.width / 2) - (tooltipRect.width / 2);
 		
-		// Adjust if tooltip goes off screen
 		if (top < scrollY + 10) {
-			top = rect.bottom + scrollY + 10; // Show below instead
+			top = rect.bottom + scrollY + 10;
 		}
 		if (left < scrollX + 10) {
 			left = scrollX + 10;
@@ -824,7 +878,6 @@ function setupChallengeTooltip(cell, challengeText) {
 		
 		currentTooltipCell = cell;
 		cellTooltipShown = true;
-		// Mark cell to prevent click action
 		cell.dataset.tooltipActive = 'true';
 	}
 	
@@ -846,9 +899,7 @@ function setupChallengeTooltip(cell, challengeText) {
 		}
 	}
 	
-	// Pointer events (works for both touch and mouse, better cross-browser support)
 	cell.addEventListener('pointerdown', (e) => {
-		// Only handle left mouse button or touch for long press
 		if (e.button === 0 || e.pointerType === 'touch') {
 			cellPressStartTime = Date.now();
 			cellTooltipShown = false;
@@ -865,9 +916,7 @@ function setupChallengeTooltip(cell, challengeText) {
 		const pressDuration = Date.now() - cellPressStartTime;
 		cancelPressTimer();
 		
-		// If tooltip was shown or press was long enough, prevent click
 		if (cellTooltipShown || pressDuration >= LONG_PRESS_DURATION) {
-			// Small delay to ensure click event is prevented
 			setTimeout(() => {
 				cell.dataset.tooltipActive = 'false';
 			}, 100);
@@ -881,19 +930,16 @@ function setupChallengeTooltip(cell, challengeText) {
 	
 	cell.addEventListener('pointerleave', () => {
 		cancelPressTimer();
-		// Only hide if it was a quick interaction (not a long press)
 		if (Date.now() - cellPressStartTime < LONG_PRESS_DURATION) {
 			hideTooltip();
 		}
 	});
 	
-	// Mouse events (desktop - right click)
 	cell.addEventListener('contextmenu', (e) => {
 		e.preventDefault();
 		showTooltip(e);
 	});
 	
-	// Touch events (mobile) - additional support for older browsers
 	cell.addEventListener('touchstart', (e) => {
 		cellPressStartTime = Date.now();
 		cellTooltipShown = false;
@@ -908,7 +954,6 @@ function setupChallengeTooltip(cell, challengeText) {
 	cell.addEventListener('touchend', (e) => {
 		const pressDuration = Date.now() - cellPressStartTime;
 		cancelPressTimer();
-		// If tooltip was shown, prevent the click
 		if (cellTooltipShown || pressDuration >= LONG_PRESS_DURATION) {
 			e.preventDefault();
 			setTimeout(() => {
@@ -923,98 +968,82 @@ function setupChallengeTooltip(cell, challengeText) {
 	});
 	
 	cell.addEventListener('touchmove', () => {
-		// Cancel long press if user moves finger
 		cancelPressTimer();
 		hideTooltip();
 	}, { passive: true });
 }
 
+// ============================================
+// GAME LOGIC - BOARD RENDERING
+// ============================================
+
 function renderBoard(board, marked = []) {
-	// empty board
 	bingoBoard.innerHTML = '';
-	// create cells
+	
+	const isLockoutMode = isLockOutModeString(currentMode);
+	
 	board.forEach((text, index) => {
 		const cell = document.createElement('div');
 		cell.className = 'cell';
 		cell.textContent = text || "";
 		cell.dataset.tileIndex = index;
-		cell.dataset.challengeText = text; // Store challenge text for tooltip
+		cell.dataset.challengeText = text;
 		
-		// free space handling: start marked but no special class
 		if (text === 'FREE') cell.classList.add('marked');
 		
-		// Add long press / right-click tooltip support
 		setupChallengeTooltip(cell, text);
 		
-		// Lock-out mode: handle locked tiles (check if mode is lock-out variant)
-		const isLockoutMode = currentMode === 'lock-out' || (typeof currentMode === 'string' && currentMode.startsWith('lock-out-'));
+		// Apply marked state based on mode
 		if (isLockoutMode) {
 			const lock = lockedTiles.get(index);
 			if (lock) {
-				if (lock.playerId === socket.id) {
-					cell.classList.add('marked'); // Your locked tile
-				} else {
-					cell.classList.add('locked-by-opponent'); // Opponent's locked tile
-				}
+				cell.classList.add(lock.playerId === socket?.id ? 'marked' : 'locked-by-opponent');
 			}
-			
-			// Use click event instead of pointerdown to allow long press to work
-			// Also track press time to detect long press
-			let pressStartTime = 0;
-			cell.addEventListener('pointerdown', () => {
-				pressStartTime = Date.now();
-			});
-			
-			cell.addEventListener('click', (e) => {
-				// Don't mark if tooltip was shown (long press) or if press was too long
-				const pressDuration = Date.now() - pressStartTime;
-				if (cell.dataset.tooltipActive === 'true' || pressDuration >= LONG_PRESS_DURATION) {
-					e.preventDefault();
-					e.stopPropagation();
-					cell.dataset.tooltipActive = 'false'; // Reset
-					return;
-				}
-				if (exchangeMode) return;
-				if (cell.textContent === 'FREE') return;
-				if (lockedTiles.has(index)) return; // Already locked
-				if (confirmingTileIndex === index) return; // Already confirming
-				
-				// Start confirmation
-				startTileConfirmation(index);
-			});
 		} else {
-			// Regular mode
 			if (marked.includes(index)) cell.classList.add('marked');
-			// Use click event instead of pointerdown to allow long press to work
-			// Also track press time to detect long press
-			let pressStartTime = 0;
-			cell.addEventListener('pointerdown', () => {
-				pressStartTime = Date.now();
-			});
-			
-			cell.addEventListener('click', (e) => {
-				// Don't mark if tooltip was shown (long press) or if press was too long
-				const pressDuration = Date.now() - pressStartTime;
-				if (cell.dataset.tooltipActive === 'true' || pressDuration >= LONG_PRESS_DURATION) {
-					e.preventDefault();
-					e.stopPropagation();
-					cell.dataset.tooltipActive = 'false'; // Reset
-					return;
-				}
-				if (exchangeMode) return;
-				if (cell.textContent === 'FREE') return;
-				cell.classList.toggle('marked');
-				saveMarkedState();
-			});
 		}
+		
+		setupCellClickHandler(cell, index, isLockoutMode);
 		
 		bingoBoard.appendChild(cell);
 	});
 }
 
-// StorageManager - Consolidates all localStorage operations
+function setupCellClickHandler(cell, index, isLockoutMode) {
+	let pressStartTime = 0;
+	
+	cell.addEventListener('pointerdown', () => {
+		pressStartTime = Date.now();
+	});
+	
+	cell.addEventListener('click', (e) => {
+		const pressDuration = Date.now() - pressStartTime;
+		if (cell.dataset.tooltipActive === 'true' || pressDuration >= LONG_PRESS_DURATION) {
+			e.preventDefault();
+			e.stopPropagation();
+			cell.dataset.tooltipActive = 'false';
+			return;
+		}
+		
+		if (exchangeMode) return;
+		if (cell.textContent === 'FREE') return;
+		
+		if (isLockoutMode) {
+			if (lockedTiles.has(index)) return;
+			if (confirmingTileIndex === index) return;
+			startTileConfirmation(index);
+		} else {
+			cell.classList.toggle('marked');
+			saveMarkedState();
+		}
+	});
+}
+
+// ============================================
+// STORAGE
+// ============================================
+
 const StorageManager = {
-	// Save game state (name, board, marked cells, exchange status)
 	saveGameState({ name, board, marked, exchangeUsed }) {
 		if (name !== undefined) localStorage.setItem('bingoName', name);
 		if (board !== undefined) localStorage.setItem('bingoBoard', JSON.stringify(board));
@@ -1030,7 +1059,6 @@ const StorageManager = {
 		}
 	},
 	
-	// Load game state
 	loadGameState() {
 		return {
 			name: localStorage.getItem('bingoName'),
@@ -1040,7 +1068,6 @@ const StorageManager = {
 		};
 	},
 	
-	// Save timer state (running, start time, elapsed time)
 	saveTimerState({ running, startMs, elapsedMs }) {
 		if (running !== undefined) {
 			localStorage.setItem('timerRunning', String(running));
@@ -1061,7 +1088,6 @@ const StorageManager = {
 		}
 	},
 	
-	// Load timer state
 	loadTimerState() {
 		return {
 			running: localStorage.getItem('timerRunning') === 'true',
@@ -1070,7 +1096,6 @@ const StorageManager = {
 		};
 	},
 	
-	// Clear all game state
 	clearGameState() {
 		localStorage.removeItem('bingoName');
 		localStorage.removeItem('bingoBoard');
@@ -1085,7 +1110,6 @@ const StorageManager = {
 // Debounced save marked state (only saves after user stops clicking for 500ms)
 let saveMarkedStateTimeout = null;
 function saveMarkedState() {
-	// Clear existing timeout
 	if (saveMarkedStateTimeout) {
 		clearTimeout(saveMarkedStateTimeout);
 	}
@@ -1104,42 +1128,34 @@ function saveMarkedState() {
 		}
 		
 		// If in multiplayer, sync with server (server is source of truth)
-		if (isMultiplayer && socket && currentRoomCode) {
+		if (isMultiplayer && socket && socket.connected && currentRoomCode) {
 			socket.emit('updateMarked', { roomCode: currentRoomCode, marked });
 		}
 		
 		saveMarkedStateTimeout = null;
-	}, 500); // 500ms debounce
+	}, 500);
 }
 
-// Legacy function for backward compatibility - only saves for single player
 function saveData(name, board) {
-	// Only save to localStorage for single player games
 	if (!isMultiplayer) {
 		StorageManager.saveGameState({ name, board });
 	}
 }
 
 function loadData() {
-	// Load game state
 	const gameState = StorageManager.loadGameState();
 	const { name, board, marked, exchangeUsed: savedExchangeUsed } = gameState;
 	exchangeUsed = savedExchangeUsed;
 	
 	if (name) nameInput.value = name;
-	if (name) welcome.textContent = `Welcome, ${name}!`;
+	updateWelcomeMessage();
 	if (board) {
-		// Ensure board is visible before rendering
-		if (bingoBoard) {
-			bingoBoard.style.display = 'grid';
-			bingoBoard.classList.remove('hidden');
-		}
+		showBoard();
 		renderBoard(board, marked);
 	}
 	updateExchangeButtonState();
-	updateGameActionButtons(); // Update button visibility after loading board
+	updateGameActionButtons();
 
-	// Restore timer state
 	const timerState = StorageManager.loadTimerState();
 	const { running: timerRunning, startMs: storedStart, elapsedMs: storedElapsed } = timerState;
 	
@@ -1153,9 +1169,13 @@ function loadData() {
 		const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
 		const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
 		const seconds = String(totalSeconds % 60).padStart(2, '0');
-		if (timerEl) timerEl.textContent = `${minutes}:${seconds}`;
+		if (timer) timer.textContent = `${minutes}:${seconds}`;
 	}
 }
+
+// ============================================
+// EXCHANGE FUNCTIONALITY
+// ============================================
 
 function exchangeTile() {
 	if (exchangeUsed) {
@@ -1180,14 +1200,11 @@ function exchangeTile() {
 		const cell = e.target;
 		if (!cell.classList.contains('cell')) return;
 
-		// get current board from storage
 		const gameState = StorageManager.loadGameState();
 		const board = gameState.board || [];
 
-		// determine index
 		const index = Array.from(bingoBoard.children).indexOf(cell);
 
-		// find unused items
 		const usedItems = new Set(board);
 		const mode = (modeSelect && modeSelect.value) || 'easy';
 		const minGrade = getCurrentMinGrade();
@@ -1205,6 +1222,7 @@ function exchangeTile() {
 		if (unusedItems.length === 0) {
 			alert('No unused challenges left!');
 			exitExchangeMode();
+			bingoBoard.removeEventListener('click', handleExchangeClick);
 			return;
 		}
 
@@ -1222,14 +1240,12 @@ function exchangeTile() {
 		exchangeUsed = true;
 		updateExchangeButtonState();
 
-		// exit exchange mode
 		exitExchangeMode();
 		bingoBoard.removeEventListener('click', handleExchangeClick);
 	};
 
 	bingoBoard.addEventListener('click', handleExchangeClick);
 }
-
 
 function exitExchangeMode() {
 	exchangeMode = false;
@@ -1244,6 +1260,10 @@ function updateExchangeButtonState() {
 	exchangeBtn.style.cursor = exchangeUsed ? 'not-allowed' : 'pointer';
 }
 
+// ============================================
+// GAME LOGIC - BINGO CHECKING
+// ============================================
+
 function getMarkedSet() {
 	const marked = new Set();
 	document.querySelectorAll('.cell').forEach((cell, index) => {
@@ -1252,7 +1272,6 @@ function getMarkedSet() {
 	return marked;
 }
 
-// Bingo line constants (matching server)
 const BINGO_LINES = {
 	DIAG_TL_BR: [0, 6, 12, 18, 24],
 	DIAG_TR_BL: [4, 8, 12, 16, 20],
@@ -1310,9 +1329,11 @@ function highlightWinningLines(lines) {
 	});
 }
 
+// ============================================
+// EVENT HANDLERS
+// ============================================
 
 generateBtn.addEventListener('click', () => {
-	// get name
 	const name = nameInput.value.trim();
 	if (!name) {
 		alert('Please enter your name first!');
@@ -1326,23 +1347,19 @@ generateBtn.addEventListener('click', () => {
 		if (!confirmNew) return;
 	}
 
-	// proceed normally
 	const board = generateBoard();
-	// Ensure board is visible before rendering
-	if (bingoBoard) {
-		bingoBoard.style.display = 'grid';
-		bingoBoard.classList.remove('hidden');
-	}
+	showBoard();
 	renderBoard(board);
 	saveData(name, board);
 	exchangeUsed = false;
+	
 	// Only save to localStorage for single player games
 	if (!isMultiplayer) {
 		StorageManager.saveGameState({ marked: [], exchangeUsed: false });
 	}
 	updateExchangeButtonState();
-	updateGameActionButtons(); // Show buttons after generating board
-	welcome.textContent = `Welcome, ${name}!`;
+	updateGameActionButtons();
+	updateWelcomeMessage();
 	startTimer();
 });
 
@@ -1353,41 +1370,29 @@ if (verifyBtn) {
 			if (cell.classList.contains('marked')) marked.push(index);
 		});
 		
-		if (isMultiplayer && socket && currentRoomCode) {
-			// Multiplayer: verify on server
+		if (isMultiplayer && socket && socket.connected && currentRoomCode) {
 			socket.emit('verifyBingo', { roomCode: currentRoomCode, marked });
 		} else {
-			// Single player: verify locally
 			if (hasBingo()) {
 				stopTimer();
-				const finalTime = timerEl ? timerEl.textContent : '';
-				// highlight line
+				const finalTime = timer ? timer.textContent : '';
 				const lines = getWinningLines();
 				highlightWinningLines(lines);
 				alert(`🎉 You win! 🎉\nTime: ${finalTime}`);
 				return;
 			}
-			if (containerEl) {
-				containerEl.classList.add('verify-fail');
-				setTimeout(() => containerEl.classList.remove('verify-fail'), 500);
+			if (container) {
+				container.classList.add('verify-fail');
+				setTimeout(() => container.classList.remove('verify-fail'), 500);
 			}
 		}
 	});
 }
 
-// Helper function to toggle visibility using classes (simplified - no dynamic height calculations)
-function toggleVisibility(element, show) {
-	if (!element) return;
-	if (show) {
-		element.classList.remove('hidden');
-		// Remove inline display style that might override classes
-		element.style.removeProperty('display');
-	} else {
-		element.classList.add('hidden');
-	}
-}
+// ============================================
+// MODE SWITCHING
+// ============================================
 
-// Unified mode switch handler - consolidates single/multiplayer switching logic
 function switchMode(mode) {
 	// Clear any pending saveMarkedState timeout
 	if (saveMarkedStateTimeout) {
@@ -1418,6 +1423,11 @@ function switchMode(mode) {
 	toggleVisibility(roomInfo, false);
 	toggleVisibility(leaderboard, false);
 	hideLobby();
+
+	updateWelcomeMessage();
+	
+	// Update section height after mode switch (hideLobby already calls it, but ensure it's called)
+	setTimeout(updateMultiplayerSectionHeight, 0);
 	
 	// Reset multiplayer state
 	currentRoomCode = null;
@@ -1435,48 +1445,40 @@ function switchMode(mode) {
 	lockedTiles = new Map();
 	lockCounts = { myLocks: 0, opponentLocks: 0 };
 	confirmingTileIndex = null;
+	countdownEndTime = null;
 	
 	if (mode === 'single') {
-		// Single player mode specific logic
-		// Stop any running timer first (ensures timer interval is cleared)
 		stopTimer();
+		stopCountdown();
 		
-		// Exit exchange mode if active
 		if (exchangeMode) {
 			exitExchangeMode();
 		}
 		
-		// Disconnect socket
+		currentMinGrade = getCurrentMinGrade();
+		
 		if (socket) {
 			socket.disconnect();
 			socket = null;
 		}
 		
-		// Update button visibility (will hide buttons since board not visible yet)
 		updateGameActionButtons();
-		
-		// Restore single player board if it exists in localStorage
 		restoreSinglePlayerBoard();
 	} else {
 		// Multiplayer mode specific logic
-		// Stop any running timer first (ensures timer interval is cleared)
 		stopTimer();
+		stopCountdown();
 		
-		// Exit exchange mode if active
 		if (exchangeMode) {
 			exitExchangeMode();
 		}
 		
-		// Reset single player game state
 		toggleVisibility(bingoBoard, false);
 		if (bingoBoard) bingoBoard.innerHTML = '';
-		updateGameActionButtons(); // Hide buttons when switching to multiplayer
-		toggleVisibility(timerEl, false);
+		updateGameActionButtons();
+		toggleVisibility(timer, false);
 		exchangeMode = false;
 		exchangeUsed = false;
-		
-		// Socket will be initialized when user creates/joins a room
-		// No need to initialize here - keeps single player offline-capable
 	}
 }
 
@@ -1487,53 +1489,43 @@ function restoreSinglePlayerBoard() {
 	
 	if (board && Array.isArray(board) && board.length === 25) {
 		try {
-			// Restore the board - ensure display is set BEFORE rendering
-			if (bingoBoard) {
-				bingoBoard.style.display = 'grid';
-				bingoBoard.classList.remove('hidden');
-				renderBoard(board, marked || []);
-				
-				// Restore timer state (same logic as loadData)
-				const timerState = StorageManager.loadTimerState();
-				const { running: timerRunning, startMs: storedStart, elapsedMs: storedElapsed } = timerState;
-				
-				if (timerRunning && storedStart) {
-					// Resume running timer
-					timerStartMs = parseInt(storedStart, 10);
-					updateTimer();
-					if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-					if (timerEl) {
-						toggleVisibility(timerEl, true);
-						timerEl.style.display = 'block';
-					}
-				} else if (!timerRunning && storedElapsed) {
-					// Show final elapsed without running
-					const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
-					const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-					const seconds = String(totalSeconds % 60).padStart(2, '0');
-					if (timerEl) {
-						timerEl.textContent = `${minutes}:${seconds}`;
-						toggleVisibility(timerEl, true);
-						timerEl.style.display = 'block';
-					}
-				} else {
-					// No timer state, start fresh
-					if (timerEl) {
-						toggleVisibility(timerEl, true);
-						timerEl.style.display = 'block';
-					}
+			showBoard();
+			renderBoard(board, marked || []);
+			
+			const timerState = StorageManager.loadTimerState();
+			const { running: timerRunning, startMs: storedStart, elapsedMs: storedElapsed } = timerState;
+			
+			if (timerRunning && storedStart) {
+				// Resume running timer
+				timerStartMs = parseInt(storedStart, 10);
+				updateTimer();
+				if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
+				if (timer) {
+					toggleVisibility(timer, true);
+					timer.style.display = 'block';
 				}
-				
-				// Restore exchange button state
-				exchangeUsed = gameState.exchangeUsed;
-				updateExchangeButtonState();
-				updateGameActionButtons(); // Update button visibility after restoring board
-				
-				// Show welcome message
-				if (welcome && savedName) {
-					welcome.textContent = `Welcome, ${savedName}!`;
+			} else if (!timerRunning && storedElapsed) {
+				// Show final elapsed without running
+				const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
+				const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+				const seconds = String(totalSeconds % 60).padStart(2, '0');
+				if (timer) {
+					timer.textContent = `${minutes}:${seconds}`;
+					toggleVisibility(timer, true);
+					timer.style.display = 'block';
+				}
+			} else {
+				// No timer state, start fresh
+				if (timer) {
+					toggleVisibility(timer, true);
+					timer.style.display = 'block';
 				}
 			}
+			
+			exchangeUsed = gameState.exchangeUsed;
+			updateExchangeButtonState();
+			updateGameActionButtons();
+			updateWelcomeMessage();
 		} catch (e) {
 			console.error('Error restoring board:', e);
 			// If restoration fails, clear localStorage and show empty state
@@ -1560,15 +1552,10 @@ function restoreSinglePlayerBoard() {
 	}
 }
 
-// Mode switch button handlers
-if (singlePlayerBtn && multiplayerBtn) {
-	singlePlayerBtn.addEventListener('click', () => switchMode('single'));
-	multiplayerBtn.addEventListener('click', () => switchMode('multi'));
-}
+// ============================================
+// LOCK-OUT MODE
+// ============================================
 
-// Create room
-
-// Create room
 if (createRoomBtn) {
 	createRoomBtn.addEventListener('click', async () => {
 		const name = nameInput.value.trim();
@@ -1577,7 +1564,7 @@ if (createRoomBtn) {
 			return;
 		}
 		
-		let mode = getCurrentMode(); // Get easy/hard mode
+		let mode = getCurrentMode();
 		const minGrade = getCurrentMinGrade();
 		
 		// If lock-out is selected, combine it with the mode
@@ -1597,7 +1584,6 @@ if (createRoomBtn) {
 	});
 }
 
-// Join room
 if (joinRoomBtn) {
 	joinRoomBtn.addEventListener('click', async () => {
 		const name = nameInput.value.trim();
@@ -1638,7 +1624,6 @@ if (startGameBtn) {
 	});
 }
 
-// Lock-out mode helper functions
 function startTileConfirmation(tileIndex) {
 	confirmingTileIndex = tileIndex;
 	const cell = bingoBoard.children[tileIndex];
@@ -1745,7 +1730,20 @@ function showRecapLog(lockHistory) {
 	toggleVisibility(recapLog, true);
 }
 
-// Set up confirmation button handlers
+// ============================================
+// INITIALIZATION
+// ============================================
+
+const lockoutToggle = document.getElementById('lockoutToggle');
+if (lockoutToggle) {
+	toggleVisibility(lockoutToggle, false);
+}
+
+if (singlePlayerBtn && multiplayerBtn) {
+	singlePlayerBtn.addEventListener('click', () => switchMode('single'));
+	multiplayerBtn.addEventListener('click', () => switchMode('multi'));
+}
+
 const confirmLockBtn = document.getElementById('confirmLockBtn');
 const cancelLockBtn = document.getElementById('cancelLockBtn');
 if (confirmLockBtn) {
@@ -1755,7 +1753,6 @@ if (cancelLockBtn) {
 	cancelLockBtn.addEventListener('click', cancelTileConfirmation);
 }
 
-// Hide tooltip when clicking elsewhere
 document.addEventListener('click', (e) => {
 	if (currentTooltipCell && !currentTooltipCell.contains(e.target)) {
 		const tooltip = document.getElementById('challengeTooltip');
@@ -1775,7 +1772,6 @@ document.addEventListener('scroll', () => {
 	currentTooltipCell = null;
 }, true);
 
-// Initialize UI state on page load
 function initializeUIState() {
 	// Ensure single player controls are visible by default (single player is default)
 	toggleVisibility(singlePlayerControls, true);
@@ -1783,20 +1779,20 @@ function initializeUIState() {
 	
 	// Hide elements that should be hidden by default
 	toggleVisibility(leaderboard, false);
-	toggleVisibility(document.getElementById('lobby'), false);
+	toggleVisibility(lobby, false);
 	toggleVisibility(document.getElementById('lockOutStats'), false);
 	toggleVisibility(document.getElementById('countdownMode'), false);
 	toggleVisibility(document.getElementById('lockConfirm'), false);
 	toggleVisibility(document.getElementById('recapLog'), false);
 	toggleVisibility(document.getElementById('roomInfo'), false);
 	toggleVisibility(document.getElementById('challengeTooltip'), false);
+	toggleVisibility(timer, false);
+	updateWelcomeMessage();
 	
-	// Initialize button visibility state
 	updateGameActionButtons();
+	setTimeout(updateMultiplayerSectionHeight, 0);
 }
 
-// Use DOMContentLoaded for faster initialization (runs earlier than 'load')
-// This runs before images/stylesheets are fully loaded, allowing us to set height before render
 document.addEventListener('DOMContentLoaded', () => {
 	initializeUIState();
 	loadData();
