@@ -329,40 +329,86 @@ button:hover {
   padding-left: 18px;
 }
 
-/* Multiplayer UI */
+/* Multiplayer UI - Fixed height container approach */
 .multiplayer-section {
   margin-top: 15px;
-  /* Use grid to allow containers to overlay in same space */
-  display: grid;
-  grid-template-areas:
-    "toggle"
-    "lockout"
-    "controls";
+  position: relative;
+  /* Fixed height - large enough for tallest content (lockout toggle + multiplayer controls) */
+  min-height: 250px;
+  width: 100%;
 }
 
+/* Mode toggle - always visible at top */
 .game-mode-toggle {
-  grid-area: toggle;
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
   justify-content: center;
+  position: relative;
+  z-index: 10;
 }
 
+/* Lockout toggle - positioned absolutely, shown only in multiplayer */
 #lockoutToggle {
-  grid-area: lockout;
+  position: absolute;
+  top: 50px; /* Below toggle buttons */
+  left: 0;
+  right: 0;
+  display: none; /* Hidden by default */
+  justify-content: center;
+  gap: 20px;
+  padding: 10px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  z-index: 5;
 }
 
-/* Control containers - both occupy same grid area to maintain height */
+#lockoutToggle:not(.hidden) {
+  display: flex;
+}
+
+/* Control containers - positioned absolutely, overlay each other */
 #singlePlayerControls,
 #multiplayerControls {
-  grid-area: controls;
+  position: absolute;
+  top: 50px; /* Below toggle buttons, same as lockout toggle */
+  left: 0;
+  right: 0;
   margin-top: 0;
+  z-index: 1;
+  overflow: hidden; /* Prevent content from causing growth */
 }
 
-/* Unified visibility system - use classes instead of inline styles */
+/* Single player controls - visible by default */
+#singlePlayerControls {
+  display: block;
+}
+
+/* Multiplayer controls - hidden by default */
+#multiplayerControls {
+  display: none;
+  max-height: 200px; /* Limit maximum height */
+}
+
+#multiplayerControls:not(.hidden) {
+  display: block;
+}
+
+/* When lockout toggle is visible, push controls down */
+#lockoutToggle:not(.hidden) ~ #singlePlayerControls,
+#lockoutToggle:not(.hidden) ~ #multiplayerControls {
+  top: 120px; /* Below lockout toggle */
+}
+
+/* Explicitly reset controls when lockout toggle is hidden */
+#lockoutToggle.hidden ~ #singlePlayerControls,
+#lockoutToggle.hidden ~ #multiplayerControls {
+  top: 50px; /* Reset to default position */
+}
+
+/* Unified visibility system - simple display none/block */
 /* Hide these elements by default (replaces inline styles) */
-#lockoutToggle,
-#multiplayerControls,
 #roomInfo,
 #challengeTooltip {
   display: none;
@@ -372,51 +418,17 @@ button:hover {
   display: none !important;
 }
 
-/* For elements that need to stay in layout flow (prevent shrinking)
-   Keep in grid but invisible - maintains grid cell height */
-.hidden-layout {
-  visibility: hidden !important;
-  pointer-events: none;
-  opacity: 0;
-  /* Keep in normal flow to maintain grid cell height */
-  position: relative;
-  height: auto;
-}
-
 /* When visible, ensure normal display - override default display: none */
-#singlePlayerControls:not(.hidden):not(.hidden-layout),
-#multiplayerControls:not(.hidden):not(.hidden-layout) {
+#roomInfo:not(.hidden),
+#challengeTooltip:not(.hidden),
+#lobby:not(.hidden),
+#startGameBtn:not(.hidden),
+#waitingForHost:not(.hidden),
+#lockOutStats:not(.hidden),
+#countdownMode:not(.hidden),
+#lockConfirm:not(.hidden),
+#recapLog:not(.hidden) {
   display: block;
-  visibility: visible;
-  position: relative;
-  pointer-events: auto;
-  opacity: 1;
-  width: 100%;
-}
-
-/* Ensure buttons inside controls remain inline-block */
-#singlePlayerControls:not(.hidden):not(.hidden-layout) button,
-#multiplayerControls:not(.hidden):not(.hidden-layout) button {
-  display: inline-block;
-}
-
-#lockoutToggle:not(.hidden):not(.hidden-layout) {
-  display: flex;
-  visibility: visible;
-  pointer-events: auto;
-  opacity: 1;
-}
-
-/* Override default display: none for other elements when visible */
-#roomInfo:not(.hidden):not(.hidden-layout),
-#challengeTooltip:not(.hidden):not(.hidden-layout) {
-  display: block;
-}
-
-/* Leaderboard should only show when explicitly made visible (no default override) */
-#leaderboard.hidden,
-#leaderboard.hidden-layout {
-  display: none !important;
 }
 
 .mode-toggle {

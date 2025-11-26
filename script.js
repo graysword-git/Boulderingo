@@ -219,10 +219,10 @@ if (lockoutRadio && normalRadio) {
 // Hide lockout toggle on initial load (single player is default)
 const lockoutToggle = document.getElementById('lockoutToggle');
 if (lockoutToggle) {
-  toggleVisibility(lockoutToggle, false, true); // Use hidden-layout to maintain height
+  toggleVisibility(lockoutToggle, false);
 }
 
-// Initialize Socket.io connection
+// Initialize Socket.io connection (lazy - only when needed for multiplayer)
 function initSocket() {
 	if (socket) return socket;
 	
@@ -369,7 +369,7 @@ function initSocket() {
 		// Show common game elements
 		if (bingoBoard) {
 			bingoBoard.style.display = 'grid';
-			bingoBoard.classList.remove('hidden', 'hidden-layout');
+			bingoBoard.classList.remove('hidden');
 		}
 		if (timerEl) {
 			toggleVisibility(timerEl, true);
@@ -429,19 +429,17 @@ function initSocket() {
 		
 		// Render board with marked tiles if provided
 		renderBoard(board, marked || []);
-		saveData(nameInput.value.trim(), board);
 		
-		// Restore marked state if provided
-		if (marked && marked.length > 0) {
-			localStorage.setItem('bingoMarked', JSON.stringify(marked));
-		} else {
-			localStorage.removeItem('bingoMarked');
-		}
-		
-		// Reset exchange if starting fresh
-		if (!marked) {
-			exchangeUsed = false;
-			localStorage.setItem('exchangeUsed', 'false');
+		// Only save to localStorage for single player games (multiplayer board comes from server)
+		if (!isMultiplayer) {
+			saveData(nameInput.value.trim(), board);
+			// Restore marked state if provided
+			StorageManager.saveGameState({ marked: marked || [] });
+			// Reset exchange if starting fresh
+			if (!marked) {
+				exchangeUsed = false;
+				StorageManager.saveGameState({ exchangeUsed: false });
+			}
 		}
 		updateExchangeButtonState();
 		updateGameActionButtons(); // Update button visibility after game setup
@@ -453,10 +451,14 @@ function initSocket() {
 	}
 	
 	socket.on('gameStarted', ({ roomCode, board, mode, startTime, minGrade }) => {
+		// Ensure multiplayer mode is set (important for rejoin scenarios)
+		isMultiplayer = true;
 		setupGameUI(mode, board, startTime, null, null, null, false, null, null, minGrade);
 	});
 	
 	socket.on('gameRejoined', ({ roomCode, board, mode, startTime, marked, lockedTiles: serverLockedTiles, lockCounts: serverLockCounts, countdownMode, countdownEndTime, leaderboard: roomLeaderboard, minGrade }) => {
+		// Ensure multiplayer mode is set (important for rejoin scenarios)
+		isMultiplayer = true;
 		setupGameUI(mode, board, startTime, marked, serverLockedTiles, serverLockCounts, countdownMode, countdownEndTime, roomLeaderboard, minGrade);
 	});
 	
@@ -567,6 +569,36 @@ function initSocket() {
 	return socket;
 }
 
+// Helper function to ensure socket is ready (only called for multiplayer)
+// Returns a promise that resolves to true if connected, false if connection failed
+async function ensureSocketReady() {
+	if (!socket) {
+		socket = initSocket();
+	}
+	
+	// If already connected, return immediately
+	if (socket.connected) {
+		return true;
+	}
+	
+	// Wait for connection with timeout
+	return new Promise((resolve) => {
+		const timeout = setTimeout(() => {
+			resolve(false);
+		}, 5000); // 5 second timeout
+		
+		socket.once('connect', () => {
+			clearTimeout(timeout);
+			resolve(true);
+		});
+		
+		socket.once('connect_error', () => {
+			clearTimeout(timeout);
+			resolve(false);
+		});
+	});
+}
+
 function formatMs(ms) {
 	const totalSeconds = Math.floor(ms / 1000);
 	const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
@@ -665,12 +697,16 @@ function stopTimer() {
 		clearInterval(timerInterval);
 		timerInterval = null;
 	}
-	// persist stopped state and final elapsed
-	if (timerStartMs != null) {
-		const stoppedElapsed = Date.now() - timerStartMs;
-		localStorage.setItem('timerElapsedMs', String(stoppedElapsed));
+	// Only persist timer state for single player games (multiplayer timer is server-managed)
+	if (!isMultiplayer) {
+		if (timerStartMs != null) {
+			const stoppedElapsed = Date.now() - timerStartMs;
+			StorageManager.saveTimerState({ running: false, elapsedMs: stoppedElapsed });
+		} else {
+			StorageManager.saveTimerState({ running: false });
+		}
 	}
-	localStorage.setItem('timerRunning', 'false');
+	// For multiplayer, timer state is managed by server - don't save to localStorage
 }
 
 function updateTimer() {
@@ -687,10 +723,10 @@ function startTimer() {
 	timerStartMs = Date.now();
 	if (timerEl) timerEl.textContent = '00:00';
 	timerInterval = setInterval(updateTimer, 1000);
-	// persist running state
-	localStorage.setItem('timerStartMs', String(timerStartMs));
-	localStorage.setItem('timerRunning', 'true');
-	localStorage.removeItem('timerElapsedMs');
+	// Only persist timer state for single player games (multiplayer timer is server-managed)
+	if (!isMultiplayer) {
+		StorageManager.saveTimerState({ running: true, startMs: timerStartMs, elapsedMs: null });
+	}
 }
 
 function getChallengePool(mode = null, minGrade = null) {
@@ -976,48 +1012,137 @@ function renderBoard(board, marked = []) {
 	});
 }
 
-function saveData(name, board) {
-	// saving with local storage
-	localStorage.setItem('bingoName', name);
-	localStorage.setItem('bingoBoard', JSON.stringify(board));
+// StorageManager - Consolidates all localStorage operations
+const StorageManager = {
+	// Save game state (name, board, marked cells, exchange status)
+	saveGameState({ name, board, marked, exchangeUsed }) {
+		if (name !== undefined) localStorage.setItem('bingoName', name);
+		if (board !== undefined) localStorage.setItem('bingoBoard', JSON.stringify(board));
+		if (marked !== undefined) {
+			if (marked && marked.length > 0) {
+				localStorage.setItem('bingoMarked', JSON.stringify(marked));
+			} else {
+				localStorage.removeItem('bingoMarked');
+			}
+		}
+		if (exchangeUsed !== undefined) {
+			localStorage.setItem('exchangeUsed', String(exchangeUsed));
+		}
+	},
+	
+	// Load game state
+	loadGameState() {
+		return {
+			name: localStorage.getItem('bingoName'),
+			board: JSON.parse(localStorage.getItem('bingoBoard') || 'null'),
+			marked: JSON.parse(localStorage.getItem('bingoMarked') || '[]'),
+			exchangeUsed: localStorage.getItem('exchangeUsed') === 'true'
+		};
+	},
+	
+	// Save timer state (running, start time, elapsed time)
+	saveTimerState({ running, startMs, elapsedMs }) {
+		if (running !== undefined) {
+			localStorage.setItem('timerRunning', String(running));
+		}
+		if (startMs !== undefined) {
+			if (startMs != null) {
+				localStorage.setItem('timerStartMs', String(startMs));
+			} else {
+				localStorage.removeItem('timerStartMs');
+			}
+		}
+		if (elapsedMs !== undefined) {
+			if (elapsedMs != null) {
+				localStorage.setItem('timerElapsedMs', String(elapsedMs));
+			} else {
+				localStorage.removeItem('timerElapsedMs');
+			}
+		}
+	},
+	
+	// Load timer state
+	loadTimerState() {
+		return {
+			running: localStorage.getItem('timerRunning') === 'true',
+			startMs: localStorage.getItem('timerStartMs'),
+			elapsedMs: localStorage.getItem('timerElapsedMs')
+		};
+	},
+	
+	// Clear all game state
+	clearGameState() {
+		localStorage.removeItem('bingoName');
+		localStorage.removeItem('bingoBoard');
+		localStorage.removeItem('bingoMarked');
+		localStorage.removeItem('exchangeUsed');
+		localStorage.removeItem('timerRunning');
+		localStorage.removeItem('timerStartMs');
+		localStorage.removeItem('timerElapsedMs');
+	}
+};
+
+// Debounced save marked state (only saves after user stops clicking for 500ms)
+let saveMarkedStateTimeout = null;
+function saveMarkedState() {
+	// Clear existing timeout
+	if (saveMarkedStateTimeout) {
+		clearTimeout(saveMarkedStateTimeout);
+	}
+	
+	// Set new timeout to save after 500ms of inactivity
+	saveMarkedStateTimeout = setTimeout(() => {
+		const marked = [];
+		// get marked cells
+		document.querySelectorAll('.cell').forEach((cell, index) => {
+			if (cell.classList.contains('marked')) marked.push(index);
+		});
+		
+		// Only save to localStorage for single player games (multiplayer state comes from server)
+		if (!isMultiplayer) {
+			StorageManager.saveGameState({ marked });
+		}
+		
+		// If in multiplayer, sync with server (server is source of truth)
+		if (isMultiplayer && socket && currentRoomCode) {
+			socket.emit('updateMarked', { roomCode: currentRoomCode, marked });
+		}
+		
+		saveMarkedStateTimeout = null;
+	}, 500); // 500ms debounce
 }
 
-function saveMarkedState() {
-	const marked = [];
-	// get marked cells
-	document.querySelectorAll('.cell').forEach((cell, index) => {
-		if (cell.classList.contains('marked')) marked.push(index);
-	});
-	localStorage.setItem('bingoMarked', JSON.stringify(marked));
-	
-	// If in multiplayer, sync with server
-	if (isMultiplayer && socket && currentRoomCode) {
-		socket.emit('updateMarked', { roomCode: currentRoomCode, marked });
+// Legacy function for backward compatibility - only saves for single player
+function saveData(name, board) {
+	// Only save to localStorage for single player games
+	if (!isMultiplayer) {
+		StorageManager.saveGameState({ name, board });
 	}
 }
 
 function loadData() {
-	const name = localStorage.getItem('bingoName');
-	const board = JSON.parse(localStorage.getItem('bingoBoard') || 'null');
-	const marked = JSON.parse(localStorage.getItem('bingoMarked') || '[]');
-	exchangeUsed = localStorage.getItem('exchangeUsed') === 'true';
+	// Load game state
+	const gameState = StorageManager.loadGameState();
+	const { name, board, marked, exchangeUsed: savedExchangeUsed } = gameState;
+	exchangeUsed = savedExchangeUsed;
+	
 	if (name) nameInput.value = name;
 	if (name) welcome.textContent = `Welcome, ${name}!`;
 	if (board) {
 		// Ensure board is visible before rendering
 		if (bingoBoard) {
 			bingoBoard.style.display = 'grid';
-			bingoBoard.classList.remove('hidden', 'hidden-layout');
+			bingoBoard.classList.remove('hidden');
 		}
 		renderBoard(board, marked);
 	}
 	updateExchangeButtonState();
 	updateGameActionButtons(); // Update button visibility after loading board
 
-	// restore timer state
-	const timerRunning = localStorage.getItem('timerRunning') === 'true';
-	const storedStart = localStorage.getItem('timerStartMs');
-	const storedElapsed = localStorage.getItem('timerElapsedMs');
+	// Restore timer state
+	const timerState = StorageManager.loadTimerState();
+	const { running: timerRunning, startMs: storedStart, elapsedMs: storedElapsed } = timerState;
+	
 	if (board && timerRunning && storedStart) {
 		// resume running timer
 		timerStartMs = parseInt(storedStart, 10);
@@ -1056,7 +1181,8 @@ function exchangeTile() {
 		if (!cell.classList.contains('cell')) return;
 
 		// get current board from storage
-		const board = JSON.parse(localStorage.getItem('bingoBoard') || '[]');
+		const gameState = StorageManager.loadGameState();
+		const board = gameState.board || [];
 
 		// determine index
 		const index = Array.from(bingoBoard.children).indexOf(cell);
@@ -1086,13 +1212,14 @@ function exchangeTile() {
 		const newItem = unusedItems[Math.floor(Math.random() * unusedItems.length)];
 		board[index] = newItem;
 
-		// save board
+		// save board (only for single player)
 		cell.textContent = newItem;
-		localStorage.setItem('bingoBoard', JSON.stringify(board));
-
+		if (!isMultiplayer) {
+			StorageManager.saveGameState({ board, exchangeUsed: true });
+		}
+		
 		// mark exchange used and disable button
 		exchangeUsed = true;
-		localStorage.setItem('exchangeUsed', 'true');
 		updateExchangeButtonState();
 
 		// exit exchange mode
@@ -1193,8 +1320,8 @@ generateBtn.addEventListener('click', () => {
 	}
 
 	// check if a board already exists
-	const existingBoard = localStorage.getItem('bingoBoard');
-	if (existingBoard) {
+	const existingState = StorageManager.loadGameState();
+	if (existingState.board) {
 		const confirmNew = confirm("Generating a new board will erase your current progress. Continue?");
 		if (!confirmNew) return;
 	}
@@ -1204,13 +1331,15 @@ generateBtn.addEventListener('click', () => {
 	// Ensure board is visible before rendering
 	if (bingoBoard) {
 		bingoBoard.style.display = 'grid';
-		bingoBoard.classList.remove('hidden', 'hidden-layout');
+		bingoBoard.classList.remove('hidden');
 	}
 	renderBoard(board);
 	saveData(name, board);
-	localStorage.removeItem('bingoMarked');
 	exchangeUsed = false;
-	localStorage.setItem('exchangeUsed', 'false');
+	// Only save to localStorage for single player games
+	if (!isMultiplayer) {
+		StorageManager.saveGameState({ marked: [], exchangeUsed: false });
+	}
 	updateExchangeButtonState();
 	updateGameActionButtons(); // Show buttons after generating board
 	welcome.textContent = `Welcome, ${name}!`;
@@ -1246,99 +1375,76 @@ if (verifyBtn) {
 	});
 }
 
-// Game mode toggle
-// Helper function to maintain section height when switching between single/multiplayer
-function maintainControlsHeight() {
-	const section = document.querySelector('.multiplayer-section');
-	if (!section) return;
-	
-	// Temporarily show both to measure their heights
-	const singleWasHidden = singlePlayerControls && (singlePlayerControls.classList.contains('hidden') || singlePlayerControls.classList.contains('hidden-layout'));
-	const multiWasHidden = multiplayerControls && (multiplayerControls.classList.contains('hidden') || multiplayerControls.classList.contains('hidden-layout'));
-	
-	// Temporarily show to measure (use inline styles for measurement only)
-	if (singleWasHidden && singlePlayerControls) {
-		singlePlayerControls.classList.remove('hidden', 'hidden-layout');
-		singlePlayerControls.style.visibility = 'hidden';
-		singlePlayerControls.style.position = 'absolute';
-	}
-	if (multiWasHidden && multiplayerControls) {
-		multiplayerControls.classList.remove('hidden', 'hidden-layout');
-		multiplayerControls.style.visibility = 'hidden';
-		multiplayerControls.style.position = 'absolute';
-	}
-	
-	// Force a reflow to ensure measurements are accurate
-	section.offsetHeight;
-	
-	// Measure both containers
-	const singleHeight = singlePlayerControls ? singlePlayerControls.offsetHeight : 0;
-	const multiHeight = multiplayerControls ? multiplayerControls.offsetHeight : 0;
-	
-	// Restore original state
-	if (singleWasHidden && singlePlayerControls) {
-		singlePlayerControls.style.removeProperty('visibility');
-		singlePlayerControls.style.removeProperty('position');
-		singlePlayerControls.classList.add('hidden-layout');
-	}
-	if (multiWasHidden && multiplayerControls) {
-		multiplayerControls.style.removeProperty('visibility');
-		multiplayerControls.style.removeProperty('position');
-		multiplayerControls.classList.add('hidden-layout');
-	}
-	
-	// Set min-height to the maximum of both to prevent shrinking
-	const maxHeight = Math.max(singleHeight, multiHeight);
-	if (maxHeight > 0) {
-		// Add space for toggle and lockout toggle
-		const toggleHeight = document.querySelector('.game-mode-toggle')?.offsetHeight || 0;
-		const lockoutHeight = document.getElementById('lockoutToggle')?.offsetHeight || 0;
-		section.style.minHeight = `${toggleHeight + lockoutHeight + maxHeight + 30}px`;
-	}
-}
-
-// Helper function to toggle visibility using classes (simpler than inline styles)
-function toggleVisibility(element, show, useLayoutFlow = false) {
+// Helper function to toggle visibility using classes (simplified - no dynamic height calculations)
+function toggleVisibility(element, show) {
 	if (!element) return;
 	if (show) {
-		element.classList.remove('hidden', 'hidden-layout');
+		element.classList.remove('hidden');
 		// Remove inline display style that might override classes
 		element.style.removeProperty('display');
 	} else {
-		element.classList.remove('hidden', 'hidden-layout');
-		element.classList.add(useLayoutFlow ? 'hidden-layout' : 'hidden');
-	}
-	// Update section height after visibility change if it's a control container
-	// Only use setTimeout for dynamic changes, not initial load
-	if (useLayoutFlow && (element === singlePlayerControls || element === multiplayerControls)) {
-		// Check if we're in initialization phase (no need for setTimeout)
-		if (document.readyState === 'loading') {
-			maintainControlsHeight();
-		} else {
-			// Use setTimeout to ensure DOM has updated for dynamic changes
-			setTimeout(maintainControlsHeight, 0);
-		}
+		element.classList.add('hidden');
 	}
 }
 
-if (singlePlayerBtn && multiplayerBtn) {
-	singlePlayerBtn.addEventListener('click', () => {
-		isMultiplayer = false;
-		singlePlayerBtn.classList.add('active');
-		multiplayerBtn.classList.remove('active');
+// Unified mode switch handler - consolidates single/multiplayer switching logic
+function switchMode(mode) {
+	// Clear any pending saveMarkedState timeout
+	if (saveMarkedStateTimeout) {
+		clearTimeout(saveMarkedStateTimeout);
+		saveMarkedStateTimeout = null;
+	}
+	
+	// Update mode state
+	isMultiplayer = (mode === 'multi');
+	
+	// Update button active states
+	if (singlePlayerBtn && multiplayerBtn) {
+		if (mode === 'single') {
+			singlePlayerBtn.classList.add('active');
+			multiplayerBtn.classList.remove('active');
+		} else {
+			multiplayerBtn.classList.add('active');
+			singlePlayerBtn.classList.remove('active');
+		}
+	}
+	
+	// Toggle control visibility
+	toggleVisibility(singlePlayerControls, mode === 'single');
+	toggleVisibility(multiplayerControls, mode === 'multi');
+	toggleVisibility(lockoutToggle, mode === 'multi');
+	
+	// Hide multiplayer-specific UI elements
+	toggleVisibility(roomInfo, false);
+	toggleVisibility(leaderboard, false);
+	hideLobby();
+	
+	// Reset multiplayer state
+	currentRoomCode = null;
+	isHost = false;
+	roomStartTime = null;
+	
+	// Hide multiplayer-specific UI elements
+	const multiplayerUIElements = ['lockOutStats', 'countdownMode', 'lockConfirm', 'recapLog'];
+	multiplayerUIElements.forEach(id => {
+		toggleVisibility(document.getElementById(id), false);
+	});
+	
+	// Reset game mode state
+	currentMode = null;
+	lockedTiles = new Map();
+	lockCounts = { myLocks: 0, opponentLocks: 0 };
+	confirmingTileIndex = null;
+	
+	if (mode === 'single') {
+		// Single player mode specific logic
+		// Stop any running timer first (ensures timer interval is cleared)
+		stopTimer();
 		
-		// Toggle controls - use hidden-layout to maintain section height
-		toggleVisibility(singlePlayerControls, true);
-		toggleVisibility(multiplayerControls, false, true);
-		toggleVisibility(lockoutToggle, false, true);
-		// Maintain section height
-		maintainControlsHeight();
-		
-		toggleVisibility(roomInfo, false);
-		toggleVisibility(leaderboard, false);
-		hideLobby();
-		currentRoomCode = null;
-		isHost = false;
+		// Exit exchange mode if active
+		if (exchangeMode) {
+			exitExchangeMode();
+		}
 		
 		// Disconnect socket
 		if (socket) {
@@ -1346,149 +1452,125 @@ if (singlePlayerBtn && multiplayerBtn) {
 			socket = null;
 		}
 		
-		// Hide multiplayer-specific UI
-		toggleVisibility(document.getElementById('lockOutStats'), false);
-		toggleVisibility(document.getElementById('countdownMode'), false);
-		toggleVisibility(document.getElementById('lockConfirm'), false);
-		toggleVisibility(document.getElementById('recapLog'), false);
-		
-		// Reset game mode to single player (not lock-out)
-		currentMode = null;
-		lockedTiles = new Map();
-		lockCounts = { myLocks: 0, opponentLocks: 0 };
-		confirmingTileIndex = null;
-		
 		// Update button visibility (will hide buttons since board not visible yet)
-		// Will be updated again after board is restored if it exists
 		updateGameActionButtons();
 		
 		// Restore single player board if it exists in localStorage
-		const savedBoard = localStorage.getItem('bingoBoard');
-		if (savedBoard) {
-			try {
-				const board = JSON.parse(savedBoard);
-				const marked = JSON.parse(localStorage.getItem('bingoMarked') || '[]');
-				if (board && Array.isArray(board) && board.length === 25) {
-					// Restore the board - ensure display is set BEFORE rendering
-					if (bingoBoard) {
-						bingoBoard.style.display = 'grid';
-						bingoBoard.classList.remove('hidden', 'hidden-layout');
-						renderBoard(board, marked);
-						
-						// Restore timer state (same logic as loadData)
-						const timerRunning = localStorage.getItem('timerRunning') === 'true';
-						const storedStart = localStorage.getItem('timerStartMs');
-						const storedElapsed = localStorage.getItem('timerElapsedMs');
-						if (timerRunning && storedStart) {
-							// Resume running timer
-							timerStartMs = parseInt(storedStart, 10);
-							updateTimer();
-							if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
-							if (timerEl) {
-								toggleVisibility(timerEl, true);
-								timerEl.style.display = 'block';
-							}
-						} else if (!timerRunning && storedElapsed) {
-							// Show final elapsed without running
-							const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
-							const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
-							const seconds = String(totalSeconds % 60).padStart(2, '0');
-							if (timerEl) {
-								timerEl.textContent = `${minutes}:${seconds}`;
-								toggleVisibility(timerEl, true);
-								timerEl.style.display = 'block';
-							}
-						} else {
-							// No timer state, start fresh
-							if (timerEl) {
-								toggleVisibility(timerEl, true);
-								timerEl.style.display = 'block';
-							}
-						}
-						
-						// Restore exchange button state
-						exchangeUsed = localStorage.getItem('exchangeUsed') === 'true';
-						updateExchangeButtonState();
-						updateGameActionButtons(); // Update button visibility after restoring board
-						
-						// Show welcome message
-						const name = localStorage.getItem('bingoName') || '';
-						if (welcome && name) {
-							welcome.textContent = `Welcome, ${name}!`;
-						}
+		restoreSinglePlayerBoard();
+	} else {
+		// Multiplayer mode specific logic
+		// Stop any running timer first (ensures timer interval is cleared)
+		stopTimer();
+		
+		// Exit exchange mode if active
+		if (exchangeMode) {
+			exitExchangeMode();
+		}
+		
+		// Reset single player game state
+		toggleVisibility(bingoBoard, false);
+		if (bingoBoard) bingoBoard.innerHTML = '';
+		updateGameActionButtons(); // Hide buttons when switching to multiplayer
+		toggleVisibility(timerEl, false);
+		exchangeMode = false;
+		exchangeUsed = false;
+		
+		// Socket will be initialized when user creates/joins a room
+		// No need to initialize here - keeps single player offline-capable
+	}
+}
+
+// Helper function to restore single player board from localStorage
+function restoreSinglePlayerBoard() {
+	const gameState = StorageManager.loadGameState();
+	const { board, marked, name: savedName } = gameState;
+	
+	if (board && Array.isArray(board) && board.length === 25) {
+		try {
+			// Restore the board - ensure display is set BEFORE rendering
+			if (bingoBoard) {
+				bingoBoard.style.display = 'grid';
+				bingoBoard.classList.remove('hidden');
+				renderBoard(board, marked || []);
+				
+				// Restore timer state (same logic as loadData)
+				const timerState = StorageManager.loadTimerState();
+				const { running: timerRunning, startMs: storedStart, elapsedMs: storedElapsed } = timerState;
+				
+				if (timerRunning && storedStart) {
+					// Resume running timer
+					timerStartMs = parseInt(storedStart, 10);
+					updateTimer();
+					if (!timerInterval) timerInterval = setInterval(updateTimer, 1000);
+					if (timerEl) {
+						toggleVisibility(timerEl, true);
+						timerEl.style.display = 'block';
+					}
+				} else if (!timerRunning && storedElapsed) {
+					// Show final elapsed without running
+					const totalSeconds = Math.floor(parseInt(storedElapsed, 10) / 1000);
+					const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+					const seconds = String(totalSeconds % 60).padStart(2, '0');
+					if (timerEl) {
+						timerEl.textContent = `${minutes}:${seconds}`;
+						toggleVisibility(timerEl, true);
+						timerEl.style.display = 'block';
 					}
 				} else {
-					// Board exists but is invalid, clear it
-					console.warn('Invalid board in localStorage, clearing. Board length:', board ? board.length : 'null');
-					localStorage.removeItem('bingoBoard');
-					if (bingoBoard) {
-						toggleVisibility(bingoBoard, false);
-						bingoBoard.innerHTML = '';
+					// No timer state, start fresh
+					if (timerEl) {
+						toggleVisibility(timerEl, true);
+						timerEl.style.display = 'block';
 					}
 				}
-			} catch (e) {
-				console.error('Error restoring board:', e);
-				// If restoration fails, clear localStorage and show empty state
-				localStorage.removeItem('bingoBoard');
-				if (bingoBoard) {
-					toggleVisibility(bingoBoard, false);
-					bingoBoard.innerHTML = '';
+				
+				// Restore exchange button state
+				exchangeUsed = gameState.exchangeUsed;
+				updateExchangeButtonState();
+				updateGameActionButtons(); // Update button visibility after restoring board
+				
+				// Show welcome message
+				if (welcome && savedName) {
+					welcome.textContent = `Welcome, ${savedName}!`;
 				}
 			}
-		} else {
-			// No saved board, hide the board
+		} catch (e) {
+			console.error('Error restoring board:', e);
+			// If restoration fails, clear localStorage and show empty state
+			StorageManager.clearGameState();
 			if (bingoBoard) {
 				toggleVisibility(bingoBoard, false);
 				bingoBoard.innerHTML = '';
 			}
 		}
-	});
-	
-	multiplayerBtn.addEventListener('click', () => {
-		isMultiplayer = true;
-		multiplayerBtn.classList.add('active');
-		singlePlayerBtn.classList.remove('active');
-		
-		// Toggle controls - show multiplayer, hide single player
-		toggleVisibility(singlePlayerControls, false, true);
-		toggleVisibility(multiplayerControls, true);
-		toggleVisibility(lockoutToggle, true);
-		// Maintain section height
-		maintainControlsHeight();
-		
-		// Reset single player game state
-		toggleVisibility(bingoBoard, false);
-		bingoBoard.innerHTML = '';
-		updateGameActionButtons(); // Hide buttons when switching to multiplayer
-		toggleVisibility(leaderboard, false);
-		toggleVisibility(timerEl, false);
-		stopTimer();
-		exchangeMode = false;
-		exchangeUsed = false;
-		currentMode = null;
-		lockedTiles = new Map();
-		lockCounts = { myLocks: 0, opponentLocks: 0 };
-		confirmingTileIndex = null;
-		toggleVisibility(document.getElementById('lockOutStats'), false);
-		toggleVisibility(document.getElementById('countdownMode'), false);
-		toggleVisibility(document.getElementById('lockConfirm'), false);
-		toggleVisibility(document.getElementById('recapLog'), false);
-		
-		// Hide lobby initially (will show when room is created/joined)
-		hideLobby();
-		currentRoomCode = null;
-		isHost = false;
-		
-		// Initialize socket if not already initialized
-		if (!socket) {
-			initSocket();
+	} else if (board) {
+		// Board exists but is invalid, clear it
+		console.warn('Invalid board in localStorage, clearing. Board length:', board ? board.length : 'null');
+		StorageManager.clearGameState();
+		if (bingoBoard) {
+			toggleVisibility(bingoBoard, false);
+			bingoBoard.innerHTML = '';
 		}
-	});
+	} else {
+		// No saved board, hide the board
+		if (bingoBoard) {
+			toggleVisibility(bingoBoard, false);
+			bingoBoard.innerHTML = '';
+		}
+	}
+}
+
+// Mode switch button handlers
+if (singlePlayerBtn && multiplayerBtn) {
+	singlePlayerBtn.addEventListener('click', () => switchMode('single'));
+	multiplayerBtn.addEventListener('click', () => switchMode('multi'));
 }
 
 // Create room
+
+// Create room
 if (createRoomBtn) {
-	createRoomBtn.addEventListener('click', () => {
+	createRoomBtn.addEventListener('click', async () => {
 		const name = nameInput.value.trim();
 		if (!name) {
 			alert('Please enter your name first!');
@@ -1504,26 +1586,20 @@ if (createRoomBtn) {
 			mode = `lock-out-${mode}`;
 		}
 		
-		// Initialize socket if not already initialized
-		if (!socket) {
-			socket = initSocket();
+		// Ensure socket is ready before emitting
+		const connected = await ensureSocketReady();
+		if (!connected) {
+			alert('Failed to connect to server. Please check your connection and try again.');
+			return;
 		}
 		
-		// Wait for socket to be connected before creating room
-		if (socket.connected) {
-			socket.emit('createRoom', { name, mode, minGrade });
-		} else {
-			// Wait for connection
-			socket.once('connect', () => {
-				socket.emit('createRoom', { name, mode, minGrade });
-			});
-		}
+		socket.emit('createRoom', { name, mode, minGrade });
 	});
 }
 
 // Join room
 if (joinRoomBtn) {
-	joinRoomBtn.addEventListener('click', () => {
+	joinRoomBtn.addEventListener('click', async () => {
 		const name = nameInput.value.trim();
 		if (!name) {
 			alert('Please enter your name first!');
@@ -1536,7 +1612,13 @@ if (joinRoomBtn) {
 			return;
 		}
 		
-		socket = initSocket();
+		// Ensure socket is ready before emitting
+		const connected = await ensureSocketReady();
+		if (!connected) {
+			alert('Failed to connect to server. Please check your connection and try again.');
+			return;
+		}
+		
 		socket.emit('joinRoom', { roomCode, name });
 	});
 }
@@ -1697,7 +1779,7 @@ document.addEventListener('scroll', () => {
 function initializeUIState() {
 	// Ensure single player controls are visible by default (single player is default)
 	toggleVisibility(singlePlayerControls, true);
-	toggleVisibility(multiplayerControls, false, true);
+	toggleVisibility(multiplayerControls, false);
 	
 	// Hide elements that should be hidden by default
 	toggleVisibility(leaderboard, false);
@@ -1711,10 +1793,6 @@ function initializeUIState() {
 	
 	// Initialize button visibility state
 	updateGameActionButtons();
-	
-	// Calculate height IMMEDIATELY (synchronously) before page is visible
-	// This prevents any visible shift
-	maintainControlsHeight();
 }
 
 // Use DOMContentLoaded for faster initialization (runs earlier than 'load')
