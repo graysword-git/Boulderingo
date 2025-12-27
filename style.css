@@ -416,15 +416,20 @@ button:hover {
   display: block;
   overflow: visible;
   max-height: none;
+  min-height: auto;
 }
 
-/* When lockout toggle is visible, push controls down */
+#multiplayerControls:not(.hidden) button {
+  display: inline-block !important;
+  visibility: visible !important;
+  position: relative;
+}
+
 #lockoutToggle:not(.hidden) ~ #singlePlayerControls,
 #lockoutToggle:not(.hidden) ~ #multiplayerControls {
   top: 120px;
 }
 
-/* Explicitly reset controls when lockout toggle is hidden */
 #lockoutToggle.hidden ~ #singlePlayerControls,
 #lockoutToggle.hidden ~ #multiplayerControls {
   top: 50px;
@@ -777,6 +782,19 @@ select:focus-visible {
   
   .join-room-section input { 
     width: 100%; 
+  }
+  
+  #multiplayerControls:not(.hidden) {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    margin-top: 15px;
+  }
+  
+  #multiplayerControls:not(.hidden) button {
+    width: 100%;
+    margin-bottom: 10px;
   }
   
   #startGameBtn {
